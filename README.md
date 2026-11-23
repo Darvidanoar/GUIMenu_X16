@@ -4,7 +4,7 @@ A mouse-driven program launcher for the [Commander X16](https://www.commanderx16
 
 Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it. It's styled after a Windows 3.1 window.
 
-![GUIMenu running in the X16 emulator](docs/screenshot.png)
+![GUIMenu running in the X16 emulator](docs/screenshot-win31.png)
 
 ## Features
 
