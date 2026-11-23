@@ -20,7 +20,17 @@
 ; byte is col*2. That makes set_cursor very short.
 ;
 ; The shapes of the characters (8 bytes each, one per pixel row,
-; leftmost pixel in bit 7) are stored at VRAM $1F000.
+; leftmost pixel in bit 7) are stored at VRAM $1F000, and the 16
+; colours of the palette (2 bytes each) at VRAM $1FA00.
+;
+; HOW THE WINDOW IS DRAWN
+; Every cell can only have two colours (its foreground and its
+; background), so the window's borders are made of custom characters
+; that draw thin black lines (foreground) on light grey (background).
+; Lines are placed at the very edge of a cell so they join up with
+; the neighbouring cells - e.g. the left edge of a list box is a
+; grey cell with a black line down its right-hand pixel column,
+; sitting next to the white inside of the box.
 ;
 ; SCREEN CODES vs PETSCII vs ASCII
 ; Screen codes are not the same as the PETSCII codes used by CHROUT
@@ -35,9 +45,18 @@
 ; fills what is left of the field with spaces.
 ;******************************************************************
 
+; where the hint text on the status line starts, and how much room
+; that leaves for the path before it
+HINT_X            = PREV_R + 1 - (str_hint_end - str_hint)
+STATUS_W          = HINT_X - STATUS_X - 1
+
+; column for the window title, centred in the title bar (which runs
+; from WIN_L+2 to WIN_R-3)
+TITLE_TEXT_X      = WIN_L + 2 + (WIN_R - WIN_L - 4 - (str_wtitle_end - str_wtitle)) / 2
+
 ;------------------------------------------------------------------
 ; init_screen - 80x60 text mode, upper/lower case character set,
-; our custom characters, and a blank blue screen.
+; our palette and custom characters, and an empty teal desktop.
 ;------------------------------------------------------------------
 init_screen:
    lda #0                         ; screen mode 0 = 80x60 text
@@ -45,6 +64,7 @@ init_screen:
    jsr SCREEN_MODE
    lda #3                         ; character set 3 = PETSCII
    jsr SCREEN_SET_CHARSET         ;   upper/lower case
+   jsr set_palette
 
    ; Copy our custom character shapes into the character set,
    ; starting at character GLYPH_BASE ($1F000 + $80*8 = $1F400).
@@ -62,20 +82,78 @@ init_screen:
    cpx #GLYPH_COUNT*8-256
    bne :-
 
-   ; Clear every row of the screen to spaces, white on blue.
+   ; Fill the whole screen with the desktop colour.
+   lda #COL_DESKTOP
+   sta cur_color
+   lda #SCREEN_COLS
+   sta fill_n
    ldy #0                         ; row
 @row:
-   ldx #0                         ; column
-   jsr set_cursor
-   lda #COL_SCREEN
-   sta cur_color
-   lda #SCREEN_COLS               ; field = the whole row
-   sta remain
-   jsr pad_field                  ; fill it with spaces
+   ldx #0
+   lda #$20                       ; space
+   jsr hfill
    iny
    cpy #SCREEN_ROWS
    bne @row
    rts
+
+;------------------------------------------------------------------
+; set_palette - save the original 16 colours, then change some of
+; them to our Windows 3.1 colours (see pal_new).
+;------------------------------------------------------------------
+set_palette:
+   VERA_SET_ADDR VRAM_palette, 1  ; save all 32 bytes
+   ldx #0
+:  lda VERA_data0
+   sta pal_save,x
+   inx
+   cpx #32
+   bne :-
+
+   ldx #0
+@next:
+   lda pal_new,x                  ; colour number, $FF = end
+   cmp #$FF
+   beq @done
+   asl                            ; 2 bytes per colour
+   sta VERA_addr_low
+   lda #>VRAM_palette
+   sta VERA_addr_high
+   lda #$11                       ; VRAM bank 1, increment 1
+   sta VERA_addr_bank
+   lda pal_new+1,x                ; green/blue byte
+   sta VERA_data0
+   lda pal_new+2,x                ; red byte
+   sta VERA_data0
+   inx
+   inx
+   inx
+   bra @next
+@done:
+   rts
+
+;------------------------------------------------------------------
+; restore_palette - put back the colours saved by set_palette
+;------------------------------------------------------------------
+restore_palette:
+   VERA_SET_ADDR VRAM_palette, 1
+   ldx #0
+:  lda pal_save,x
+   sta VERA_data0
+   inx
+   cpx #32
+   bne :-
+   rts
+
+; New colours: colour number, then $GB (green, blue), then $0R (red).
+; Each of R, G, B goes from 0 (none) to F (full).
+pal_new:
+   .byte $09, $08, $00            ; 9 navy       #008
+   .byte $0A, $88, $00            ; A teal       #088
+   .byte $0B, $88, $08            ; B grey       #888
+   .byte $0C, $00, $00            ; C black      #000
+   .byte $0F, $CC, $0C            ; F light grey #CCC
+   .byte $FF
 
 ;------------------------------------------------------------------
 ; set_cursor - point VERA at a screen cell, ready to write
@@ -203,29 +281,34 @@ char_at:
    jmp put_char
 
 ;------------------------------------------------------------------
-; hline - draw a horizontal border line
-; In: X = column, Y = row, A = length
+; hfill - write a row of the same character
+; In: X = column, Y = row, A = screen code, fill_n = how many,
+;     colour in cur_color.  Preserves X, Y and fill_n.
 ;------------------------------------------------------------------
-hline:
-   sta remain
+hfill:
+   sta fill_ch
    jsr set_cursor
-:  lda #CH_H
+   lda fill_n
+   sta remain
+:  lda fill_ch
    jsr put_char
    lda remain
    bne :-
    rts
 
 ;------------------------------------------------------------------
-; vline - draw a vertical border line down the list area
-; (rows LIST_TOP to LIST_TOP+LIST_ROWS-1)
-; In: X = column
+; vfill - write a column of the same character
+; In: X = column, Y = top row, A = screen code, fill_n = how many,
+;     colour in cur_color.  Preserves X and fill_n.
 ;------------------------------------------------------------------
-vline:
-   ldy #LIST_TOP
-:  lda #CH_V
+vfill:
+   sta fill_ch
+   lda fill_n
+   sta fill_left
+:  lda fill_ch
    jsr char_at
    iny
-   cpy #LIST_TOP+LIST_ROWS
+   dec fill_left
    bne :-
    rts
 
@@ -318,12 +401,13 @@ pet_to_screen:
    rts
 
 ;------------------------------------------------------------------
-; draw_header - the X16 logo and the title text
+; draw_desktop_icon - the X16 logo with "Commander X16" under it,
+; like a program icon on the Windows 3.1 desktop.
 ;
 ; The logo is the same one the X16 shows when it starts: 7 rows of
 ; 7 characters (see "logo" below), each row in its own colour.
 ;------------------------------------------------------------------
-draw_header:
+draw_desktop_icon:
    ldy #0                         ; Y = logo row 0..6
 @row:
    lda logo_colors,y              ; this row's colour
@@ -360,145 +444,279 @@ draw_header:
    cpy #7
    bne @row
 
-   ; "Commander X16"
-   lda #<str_title
+   ; the caption
+   lda #<str_caption
    sta sptr
-   lda #>str_title
+   lda #>str_caption
    sta sptr+1
-   ldx #TITLE_X
-   ldy #LOGO_Y+2
-   lda #COL_TITLE
-   jsr print_at
-
-   ; "SD Card Program Launcher"
-   lda #<str_subtitle
-   sta sptr
-   lda #>str_subtitle
-   sta sptr+1
-   ldx #TITLE_X
-   ldy #LOGO_Y+4
-   lda #COL_SUBTITLE
+   ldx #CAPTION_X
+   ldy #CAPTION_Y
+   lda #COL_DESKTOP
    jmp print_at
 
 ;------------------------------------------------------------------
-; draw_frame - the window's borders, column titles and hint text.
-; Drawn once at start-up; the lists are drawn inside it later.
+; draw_window - the window: border, title bar, grey client area,
+; labels, the three list boxes and the status line hint. Drawn once
+; at start-up; the lists are drawn inside the boxes later.
 ;------------------------------------------------------------------
-draw_frame:
-   lda #COL_BORDER
+draw_window:
+   lda #COL_FRAME
    sta cur_color
 
-   ; top border:  +-------+-------+-------+
-   ldx #LEFT_X
-   ldy #WIN_TOP
-   lda #SCREEN_COLS
-   jsr hline
-   ldy #WIN_TOP
-   ldx #LEFT_X
-   lda #CH_TL
+   ; ---- the sizing border ----
+   lda #WIN_R-WIN_L-1             ; top and bottom edges
+   sta fill_n
+   ldx #WIN_L+1
+   ldy #WIN_T
+   lda #CH_W_H
+   jsr hfill
+   ldy #WIN_B
+   lda #CH_W_H
+   jsr hfill
+
+   lda #WIN_B-WIN_T-1             ; left and right edges
+   sta fill_n
+   ldx #WIN_L
+   ldy #WIN_T+1
+   lda #CH_W_V
+   jsr vfill
+   ldx #WIN_R
+   ldy #WIN_T+1
+   lda #CH_W_V
+   jsr vfill
+
+   ldx #WIN_L                     ; corners
+   ldy #WIN_T
+   lda #CH_W_TL
    jsr char_at
-   ldx #DIV1_X
-   lda #CH_TT
+   ldx #WIN_R
+   lda #CH_W_TR
    jsr char_at
-   ldx #DIV2_X
-   lda #CH_TT
+   ldy #WIN_B
+   lda #CH_W_BR
    jsr char_at
-   ldx #RIGHT_X
-   lda #CH_TR
+   ldx #WIN_L
+   lda #CH_W_BL
    jsr char_at
 
-   ; line above the status line:  |-------+-------+-------|
-   ldx #LEFT_X
-   ldy #SEP_ROW
-   lda #SCREEN_COLS
-   jsr hline
-   ldy #SEP_ROW
-   ldx #LEFT_X
-   lda #CH_LT
+   ; the little notches that mark off the corners of the border
+   ldx #WIN_L+2
+   ldy #WIN_T
+   lda #CH_W_NL
    jsr char_at
-   ldx #DIV1_X
-   lda #CH_BT
+   ldy #WIN_B
+   lda #CH_W_NL
    jsr char_at
-   ldx #DIV2_X
-   lda #CH_BT
+   ldx #WIN_R-2
+   lda #CH_W_NR
    jsr char_at
-   ldx #RIGHT_X
-   lda #CH_RT
+   ldy #WIN_T
+   lda #CH_W_NR
    jsr char_at
-
-   ; bottom border:  +-----------------------+
-   ldx #LEFT_X
-   ldy #WIN_BOTTOM
-   lda #SCREEN_COLS
-   jsr hline
-   ldy #WIN_BOTTOM
-   ldx #LEFT_X
-   lda #CH_BL
+   ldx #WIN_L
+   ldy #WIN_T+2
+   lda #CH_W_NT
    jsr char_at
-   ldx #RIGHT_X
-   lda #CH_BR
+   ldx #WIN_R
+   lda #CH_W_NT
+   jsr char_at
+   ldy #WIN_B-2
+   lda #CH_W_NB
+   jsr char_at
+   ldx #WIN_L
+   lda #CH_W_NB
    jsr char_at
 
-   ; the four vertical lines down the list area
-   ldx #LEFT_X
-   jsr vline
-   ldx #DIV1_X
-   jsr vline
-   ldx #DIV2_X
-   jsr vline
-   ldx #RIGHT_X
-   jsr vline
-   ; and the two at either end of the status line
-   ldy #STATUS_ROW
-   ldx #LEFT_X
-   lda #CH_V
+   ; ---- the title bar ----
+   lda #COL_TITLE
+   sta cur_color
+   lda #WIN_R-WIN_L-4             ; navy bar between the gadgets
+   sta fill_n
+   ldx #WIN_L+2
+   ldy #TITLE_ROW
+   lda #$20
+   jsr hfill
+   lda #<str_wtitle
+   sta sptr
+   lda #>str_wtitle
+   sta sptr+1
+   ldx #TITLE_TEXT_X
+   ldy #TITLE_ROW
+   lda #COL_TITLE
+   jsr print_at
+
+   lda #COL_FRAME                 ; the (decorative) gadgets
+   sta cur_color
+   ldx #WIN_L+1
+   ldy #TITLE_ROW
+   lda #CH_SYSBOX
    jsr char_at
-   ldx #RIGHT_X
-   lda #CH_V
+   ldx #WIN_R-2
+   lda #CH_MIN
+   jsr char_at
+   ldx #WIN_R-1
+   lda #CH_MAX
    jsr char_at
 
-   ; column titles, written over the top border
+   ; ---- the grey client area ----
+   lda #WIN_R-WIN_L-1
+   sta fill_n
+   ldx #WIN_L+1                   ; first row: black line along the
+   ldy #CLIENT_TOP                ;   top, under the title bar
+   lda #CH_TOPLINE
+   jsr hfill
+@client:
+   iny                            ; the other rows: plain grey
+   cpy #WIN_B
+   beq :+
+   lda #$20
+   jsr hfill
+   bra @client
+:
+   ; ---- labels above the boxes ----
    lda #<str_folders
    sta sptr
    lda #>str_folders
    sta sptr+1
-   ldx #TREE_X+1
-   ldy #WIN_TOP
-   lda #COL_TITLE
+   ldx #TREE_X
+   ldy #LABEL_ROW
+   lda #COL_LABEL
    jsr print_at
 
    lda #<str_files
    sta sptr
    lda #>str_files
    sta sptr+1
-   ldx #FILE_X+1
-   ldy #WIN_TOP
-   lda #COL_TITLE
+   ldx #FILE_X
+   ldy #LABEL_ROW
+   lda #COL_LABEL
    jsr print_at
 
    lda #<str_preview
    sta sptr
    lda #>str_preview
    sta sptr+1
-   ldx #PREV_X+1
-   ldy #WIN_TOP
-   lda #COL_TITLE
+   ldx #PREV_X
+   ldy #LABEL_ROW
+   lda #COL_LABEL
    jsr print_at
 
-   ; hint, right-aligned on the status line
+   ; ---- the three boxes ----
+   ldx #TREE_L
+   ldy #TREE_R
+   jsr draw_listbox
+   ldx #FILE_L
+   ldy #FILE_R
+   jsr draw_listbox
+   ldx #PREV_L
+   ldy #PREV_R
+   jsr draw_listbox
+
+   ; the preview box is just white inside, for now
+   lda #COL_LIST
+   sta cur_color
+   lda #PREV_W
+   sta fill_n
+   ldx #PREV_X
+   ldy #LIST_TOP
+@preview:
+   lda #$20
+   jsr hfill
+   iny
+   cpy #LIST_TOP+LIST_ROWS
+   bne @preview
+
+   ; ---- hint on the right of the status line ----
    lda #<str_hint
    sta sptr
    lda #>str_hint
    sta sptr+1
-   ldx #RIGHT_X-(str_hint_end-str_hint)
+   ldx #HINT_X
    ldy #STATUS_ROW
-   lda #COL_HINT
+   lda #COL_STATUS
    jmp print_at
 
 ;------------------------------------------------------------------
-; draw_tree - redraw the folder column
+; draw_listbox - the thin black border around a list box. The box
+; runs from row BOX_T to BOX_B; the list rows are inside it.
+; In: X = left edge column, Y = right edge column
+;------------------------------------------------------------------
+draw_listbox:
+   stx lb_l
+   sty lb_r
+   lda #COL_FRAME
+   sta cur_color
+
+   tya                            ; width between the corners
+   sec
+   sbc lb_l
+   dec a
+   sta fill_n
+   inx
+   ldy #BOX_T
+   lda #CH_LB_T                   ; top edge
+   jsr hfill
+   ldy #BOX_B
+   lda #CH_LB_B                   ; bottom edge
+   jsr hfill
+
+   lda #LIST_ROWS
+   sta fill_n
+   ldx lb_l
+   ldy #LIST_TOP
+   lda #CH_LB_L                   ; left edge
+   jsr vfill
+   ldx lb_r
+   ldy #LIST_TOP
+   lda #CH_LB_R                   ; right edge
+   jsr vfill
+
+   ldx lb_l                       ; corners
+   ldy #BOX_T
+   lda #CH_LB_TL
+   jsr char_at
+   ldy #BOX_B
+   lda #CH_LB_BL
+   jsr char_at
+   ldx lb_r
+   lda #CH_LB_BR
+   jsr char_at
+   ldy #BOX_T
+   lda #CH_LB_TR
+   jmp char_at
+
+;------------------------------------------------------------------
+; draw_scrollbar - draw a scroll bar
+; In: X = column, sb_count = items in the list, sb_scroll = scroll
+;     position. The thumb is only drawn if the list can scroll.
+;------------------------------------------------------------------
+draw_scrollbar:
+   stx sb_col
+   lda #COL_FRAME
+   sta cur_color
+   ldy #LIST_TOP
+   lda #CH_SB_UP                  ; up arrow
+   jsr char_at
+   ldy #LIST_TOP+LIST_ROWS-1
+   lda #CH_SB_DOWN                ; down arrow
+   jsr char_at
+   lda #TRACK_ROWS
+   sta fill_n
+   ldy #TRACK_TOP
+   lda #CH_SB_TRACK               ; empty track
+   jsr vfill
+   jsr thumb_row                  ; where does the thumb go?
+   bcs :+                         ; nowhere: the list doesn't scroll
+   tay
+   ldx sb_col
+   lda #CH_SB_THUMB
+   jmp char_at
+:  rts
+
+;------------------------------------------------------------------
+; draw_tree - redraw the folder list and its scroll bar
 ;
-; Each of the 48 rows shows node (tree_scroll + row), like this:
+; Each of the list rows shows node (tree_scroll + row), like this:
 ;
 ;     <indent>[+]<folder icon> NAME
 ;
@@ -508,7 +726,7 @@ draw_frame:
 ; is highlighted.
 ;------------------------------------------------------------------
 draw_tree:
-   stz tmp                        ; tmp = list row 0..47
+   stz tmp                        ; tmp = list row
 @row:
    ; start a TREE_W wide field at the start of this row
    lda tmp
@@ -519,7 +737,7 @@ draw_tree:
    jsr set_cursor
    lda #TREE_W
    sta remain
-   lda #COL_SCREEN
+   lda #COL_LIST
    sta cur_color
 
    ; node number = row + scroll position; blank if past the end
@@ -534,7 +752,7 @@ draw_tree:
    jsr load_rec                   ; copy it into recbuf
 
    ; colour: highlighted if it is the open folder
-   lda #COL_DIR
+   lda #COL_LIST
    ldx tmp+1
    cpx tree_sel
    bne :+
@@ -568,8 +786,18 @@ draw_tree:
    ldx #$20                       ; expanded but empty: space
 :  txa
    jsr put_char
+
+   ; the folder icon, in orange on the row's background
+   lda cur_color
+   pha
+   and #$F0
+   ora #COL_FOLDER
+   sta cur_color
    lda #CH_FOLDER
    jsr put_char
+   pla
+   sta cur_color
+
    lda #$20
    jsr put_char
    jsr put_recname
@@ -580,49 +808,24 @@ draw_tree:
    cmp #LIST_ROWS
    beq :+
    jmp @row                       ; (too far for a branch)
-:  jmp draw_tree_arrows
+:
+   lda tree_count                 ; and the scroll bar
+   sta sb_count
+   lda tree_scroll
+   sta sb_scroll
+   ldx #TREE_SB
+   jmp draw_scrollbar
 
 ;------------------------------------------------------------------
-; draw_tree_arrows - show scroll arrows on the divider to the right
-; of the tree: an up arrow at the top if the list is scrolled down,
-; a down arrow at the bottom if there are more nodes below. Where
-; there is no arrow, the plain divider line is drawn.
-;------------------------------------------------------------------
-draw_tree_arrows:
-   lda #COL_BORDER
-   sta cur_color
-   lda #CH_V
-   ldy tree_scroll
-   beq :+                         ; at the top: no up arrow
-   lda #CH_UP
-:  ldx #DIV1_X
-   ldy #LIST_TOP
-   jsr char_at
-   lda tree_scroll                ; last shown + 1 = scroll + 48
-   clc
-   adc #LIST_ROWS
-   bcs @no_down
-   cmp tree_count
-   bcs @no_down                   ; nothing below: no down arrow
-   lda #CH_DOWN
-   bra @draw
-@no_down:
-   lda #CH_V
-@draw:
-   ldx #DIV1_X
-   ldy #LIST_TOP+LIST_ROWS-1
-   jmp char_at
-
-;------------------------------------------------------------------
-; draw_files - redraw the file column
+; draw_files - redraw the file list and its scroll bar
 ;
 ; Each row shows file (file_scroll + row) of the sorted list.
-; Programs are yellow, other files light grey, and the highlighted
-; file gets a coloured bar. An empty folder shows "(no files)", and
-; a folder that couldn't be read shows an error.
+; Programs are blue, other files black, and the highlighted file
+; gets a navy bar. An empty folder shows "(no files)", and a folder
+; that couldn't be read shows an error.
 ;------------------------------------------------------------------
 draw_files:
-   stz tmp                        ; tmp = list row 0..47
+   stz tmp                        ; tmp = list row
 @row:
    ; start a FILE_W wide field at the start of this row
    lda tmp
@@ -633,7 +836,7 @@ draw_files:
    jsr set_cursor
    lda #FILE_W
    sta remain
-   lda #COL_SCREEN
+   lda #COL_LIST
    sta cur_color
 
    ; position in the sorted list = row + scroll position
@@ -650,7 +853,7 @@ draw_files:
    jsr load_rec                   ; copy it into recbuf
 
    ; pick colours: X = normal colour, Y = highlighted colour
-   ldx #COL_FILE
+   ldx #COL_LIST
    ldy #COL_SEL
    lda recbuf+REC_FLAGS
    and #FLAG_PRG
@@ -675,7 +878,7 @@ draw_files:
    lda tmp
    ora file_count                 ; both 0?
    bne @empty
-   lda #COL_HINT
+   lda #COL_EMPTY
    sta cur_color
    lda dir_error
    beq :+
@@ -697,43 +900,25 @@ draw_files:
    beq :+
    jmp @row                       ; (too far for a branch)
 :
-   ; scroll arrows on the divider to the right (see draw_tree_arrows)
-   lda #COL_BORDER
-   sta cur_color
-   lda #CH_V
-   ldy file_scroll
-   beq :+
-   lda #CH_UP
-:  ldx #DIV2_X
-   ldy #LIST_TOP
-   jsr char_at
+   lda file_count                 ; and the scroll bar
+   sta sb_count
    lda file_scroll
-   clc
-   adc #LIST_ROWS
-   bcs @no_down
-   cmp file_count
-   bcs @no_down
-   lda #CH_DOWN
-   bra @draw
-@no_down:
-   lda #CH_V
-@draw:
-   ldx #DIV2_X
-   ldy #LIST_TOP+LIST_ROWS-1
-   jmp char_at
+   sta sb_scroll
+   ldx #FILE_SB
+   jmp draw_scrollbar
 
 ;------------------------------------------------------------------
 ; draw_status - show the open folder's path (e.g. /GAMES/ARCADE)
 ; on the status line, in the space to the left of the hint.
 ;------------------------------------------------------------------
 draw_status:
-   ldx #LEFT_X+2
+   ldx #STATUS_X
    ldy #STATUS_ROW
    jsr set_cursor
    lda #COL_STATUS
    sta cur_color
-   lda #RIGHT_X-(str_hint_end-str_hint)-LEFT_X-3
-   sta remain                     ; up to where the hint starts
+   lda #STATUS_W
+   sta remain
    lda #<pathbuf
    sta sptr
    lda #>pathbuf
@@ -741,17 +926,27 @@ draw_status:
    jsr put_ascii_string
    jmp pad_field
 
+.pushseg
+.segment "BSS"
+fill_ch:   .res 1                 ; character for hfill / vfill
+fill_left: .res 1                 ; rows left for vfill
+lb_l:      .res 1                 ; list box edges for draw_listbox
+lb_r:      .res 1
+sb_col:    .res 1                 ; column for draw_scrollbar
+.popseg
+
 ;------------------------------------------------------------------
 ; Text. With "-t cx16" the assembler stores strings as PETSCII.
 ;------------------------------------------------------------------
-str_title:     .byte "Commander X16", 0
-str_subtitle:  .byte "SD Card Program Launcher", 0
-str_folders:   .byte " Folders ", 0
-str_files:     .byte " Files ", 0
-str_preview:   .byte " Preview ", 0
+str_caption:   .byte "Commander X16", 0
+str_wtitle:    .byte "SD Card Program Launcher"
+str_wtitle_end: .byte 0
+str_folders:   .byte "Folders:", 0
+str_files:     .byte "Files:", 0
+str_preview:   .byte "Preview:", 0
 str_no_files:  .byte " (no files)", 0
 str_dir_error: .byte " Unable to read folder", 0
-str_hint:      .byte "Double-click a program to run it  Q=Quit "
+str_hint:      .byte "Double-click a program to run it.  Q = Quit"
 str_hint_end:  .byte 0
 
 ;------------------------------------------------------------------
@@ -769,29 +964,31 @@ logo:
    .byte $8D,$85,$8E,$20,$8F,$85,$90
    .byte $91,$8E,$20,$20,$20,$8F,$92
 
-; colour of each logo row (on the blue background):
+; colour of each logo row, on the teal desktop:
 ; purple, light blue, cyan, green, yellow, orange, red
 logo_colors:
-   .byte $64,$6E,$63,$65,$67,$68,$62
+   .byte $A4,$AE,$A3,$A5,$A7,$A8,$A2
 
 ;------------------------------------------------------------------
-; Custom character shapes, copied over screen codes $80-$A2 by
+; Custom character shapes, copied over screen codes $80-$AF by
 ; init_screen. Each character is 8 bytes, top row first; in each
 ; byte bit 7 is the leftmost pixel and a 1 bit is drawn in the
-; foreground colour. For example the [+] box ($A1) is:
+; foreground colour. For example the window's top-left corner
+; ($93) is:
 ;
-;     $FE  #######.
-;     $82  #.....#.
-;     $92  #..#..#.
-;     $BA  #.###.#.
-;     $92  #..#..#.
-;     $82  #.....#.
-;     $FE  #######.
-;     $00  ........
+;     $FF  ########     black outer edge along the top...
+;     $80  #.......     ...and down the left
+;     $80  #.......
+;     $80  #.......
+;     $80  #.......
+;     $80  #.......
+;     $80  #.......
+;     $81  #......#     the inner edge starts at the far corner
 ;------------------------------------------------------------------
 glyphs:
-   .byte $00,$80,$C0,$E0,$F0,$F8,$FC,$FE   ; $80 logo: triangles,
-   .byte $7F,$7F,$7F,$7F,$7F,$7F,$7F,$7F   ; $81   bars and blocks
+   ; ---- $80-$92: logo pieces (triangles, bars and blocks) ----
+   .byte $00,$80,$C0,$E0,$F0,$F8,$FC,$FE   ; $80
+   .byte $7F,$7F,$7F,$7F,$7F,$7F,$7F,$7F   ; $81
    .byte $00,$01,$03,$07,$0F,$1F,$3F,$7F   ; $82
    .byte $FE,$FE,$FE,$FE,$FE,$FE,$FE,$FE   ; $83
    .byte $1F,$1F,$1F,$1F,$1F,$1F,$1F,$1F   ; $84
@@ -809,19 +1006,38 @@ glyphs:
    .byte $C0,$C0,$C0,$C0,$C0,$C0,$C0,$C0   ; $90
    .byte $07,$07,$07,$07,$07,$07,$07,$07   ; $91
    .byte $E0,$E0,$E0,$E0,$E0,$E0,$E0,$E0   ; $92
-   .byte $00,$00,$00,$1F,$1F,$18,$18,$18   ; $93 top left corner
-   .byte $00,$00,$00,$F8,$F8,$18,$18,$18   ; $94 top right corner
-   .byte $18,$18,$18,$1F,$1F,$00,$00,$00   ; $95 bottom left corner
-   .byte $18,$18,$18,$F8,$F8,$00,$00,$00   ; $96 bottom right corner
-   .byte $00,$00,$00,$FF,$FF,$00,$00,$00   ; $97 horizontal line
-   .byte $18,$18,$18,$18,$18,$18,$18,$18   ; $98 vertical line
-   .byte $18,$18,$18,$1F,$1F,$18,$18,$18   ; $99 left tee
-   .byte $18,$18,$18,$F8,$F8,$18,$18,$18   ; $9A right tee
-   .byte $00,$00,$00,$FF,$FF,$18,$18,$18   ; $9B top tee
-   .byte $18,$18,$18,$FF,$FF,$00,$00,$00   ; $9C bottom tee
-   .byte $18,$18,$18,$FF,$FF,$18,$18,$18   ; $9D cross (spare)
-   .byte $18,$3C,$7E,$FF,$18,$18,$18,$18   ; $9E scroll up arrow
-   .byte $18,$18,$18,$18,$FF,$7E,$3C,$18   ; $9F scroll down arrow
-   .byte $00,$E0,$9F,$81,$81,$81,$FF,$00   ; $A0 folder icon
-   .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $A1 [+] box
-   .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $A2 [-] box
+   ; ---- $93-$9C: window sizing border ----
+   ; grey, with a black line on the outside and inside edges
+   .byte $FF,$80,$80,$80,$80,$80,$80,$81   ; $93 top left corner
+   .byte $FF,$01,$01,$01,$01,$01,$01,$81   ; $94 top right corner
+   .byte $81,$80,$80,$80,$80,$80,$80,$FF   ; $95 bottom left corner
+   .byte $81,$01,$01,$01,$01,$01,$01,$FF   ; $96 bottom right corner
+   .byte $FF,$00,$00,$00,$00,$00,$00,$FF   ; $97 top/bottom edge
+   .byte $81,$81,$81,$81,$81,$81,$81,$81   ; $98 left/right edge
+   .byte $FF,$80,$80,$80,$80,$80,$80,$FF   ; $99 notch, left side
+   .byte $FF,$01,$01,$01,$01,$01,$01,$FF   ; $9A notch, right side
+   .byte $FF,$81,$81,$81,$81,$81,$81,$81   ; $9B notch, top side
+   .byte $81,$81,$81,$81,$81,$81,$81,$FF   ; $9C notch, bottom side
+   ; ---- $9D-$A0: title bar ----
+   .byte $01,$01,$01,$7F,$43,$7F,$01,$01   ; $9D control-menu box
+   .byte $80,$80,$80,$BE,$9C,$88,$80,$80   ; $9E minimise (down)
+   .byte $80,$80,$88,$9C,$BE,$80,$80,$80   ; $9F maximise (up)
+   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $A0 line under title
+   ; ---- $A1-$A8: list box border (thin black line) ----
+   .byte $00,$00,$00,$00,$00,$00,$00,$01   ; $A1 top left
+   .byte $00,$00,$00,$00,$00,$00,$00,$FF   ; $A2 top
+   .byte $00,$00,$00,$00,$00,$00,$00,$80   ; $A3 top right
+   .byte $01,$01,$01,$01,$01,$01,$01,$01   ; $A4 left
+   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $A5 right
+   .byte $01,$00,$00,$00,$00,$00,$00,$00   ; $A6 bottom left
+   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $A7 bottom
+   .byte $80,$00,$00,$00,$00,$00,$00,$00   ; $A8 bottom right
+   ; ---- $A9-$AC: scroll bar ----
+   .byte $80,$80,$88,$9C,$BE,$80,$80,$FF   ; $A9 up arrow button
+   .byte $FF,$80,$80,$BE,$9C,$88,$80,$80   ; $AA down arrow button
+   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $AB track
+   .byte $FF,$80,$BE,$BE,$BE,$BE,$80,$FF   ; $AC thumb
+   ; ---- $AD-$AF: tree ----
+   .byte $00,$E0,$9F,$81,$81,$81,$FF,$00   ; $AD folder icon
+   .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $AE [+] box
+   .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $AF [-] box

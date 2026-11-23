@@ -1,33 +1,43 @@
 ;******************************************************************
 ; X16 GUI Menu
 ;
-; A mouse driven program launcher for the Commander X16.
+; A mouse driven program launcher for the Commander X16, styled
+; after a Windows 3.1 window on a teal desktop.
 ;
-;   +-------------------------------------------------------------+
-;   | [logo]  Commander X16                                        |
-;   |         SD Card Program Launcher                             |
-;   +- Folders ---------+- Files ----------+- Preview -------------+
-;   | [-] SD Card       |  HELLO.PRG       |                       |
-;   |  [+] GAMES        |  readme.txt      |   (reserved for       |
-;   |  [+] TOOLS        |                  |    later)             |
-;   +-------------------+------------------+-----------------------+
-;   | /GAMES                       Double-click a program to run it |
-;   +-------------------------------------------------------------+
+;   [logo]                                     <- desktop icon
+;   Commander X16
+;  +==========================================================+
+;  |[-]            SD Card Program Launcher             [v][^]|
+;  |----------------------------------------------------------|
+;  |  Folders:              Files:                 Preview:   |
+;  |  +---------------+-+   +---------------+-+   +---------+ |
+;  |  |[-] SD Card    |^|   | HELLO.PRG     |^|   |         | |
+;  |  | [+] GAMES     | |   | readme.txt    |#|   |         | |
+;  |  | [+] TOOLS     |v|   |               |v|   |         | |
+;  |  +---------------+-+   +---------------+-+   +---------+ |
+;  |  /GAMES                    Double-click a program ...     |
+;  +==========================================================+
 ;
-;   - Left column:   a tree of the folders on the SD card.
-;                    Click a folder name to open it.
-;                    Click its [+]/[-] box to expand or collapse it.
-;   - Middle column: the files in the open folder. Programs (.PRG)
-;                    are shown in yellow. Double-click one to run it.
-;   - Right column:  preview panel (empty for now).
-;   - Mouse wheel scrolls the column under the pointer, and the
-;     arrows on the column dividers scroll a page at a time.
+;   - Left list:   a tree of the folders on the SD card.
+;                  Click a folder name to open it.
+;                  Click its [+]/[-] box to expand or collapse it.
+;   - Middle list: the files in the open folder. Programs (.PRG)
+;                  are shown in blue. Double-click one to run it.
+;   - Right panel: preview (empty for now).
+;   - Scroll bars: click the arrows to scroll a line (hold to
+;                  repeat), click the track above/below the thumb
+;                  to scroll a page, or drag the thumb. The mouse
+;                  wheel scrolls the list under the pointer.
+;   - The window's control box and minimise/maximise buttons are
+;     only decoration.
 ;   - Q, ESC or RUN/STOP quits back to BASIC.
 ;
 ; Source files (all assembled together as one unit, see the
 ; .include lines at the bottom of this file):
-;   GUIMENU.ASM  constants, variables, start-up, main loop, mouse
-;   SCREEN.ASM   everything that draws on the screen, custom glyphs
+;   GUIMENU.ASM  constants, variables, start-up, main loop, mouse,
+;                scroll bars
+;   SCREEN.ASM   everything that draws on the screen, custom glyphs,
+;                palette
 ;   TREE.ASM     the folder tree and record storage in banked RAM
 ;   DOS.ASM      sending DOS commands and reading directory listings
 ;   LAUNCH.ASM   loading and running the chosen program
@@ -85,79 +95,132 @@ FLAG_PRG          = $01           ; file name ends in .PRG
 SCREEN_COLS       = 80
 SCREEN_ROWS       = 60
 
-LOGO_X            = 1             ; top left corner of the 7x7 logo
+; desktop icon
+LOGO_X            = 4             ; top left corner of the 7x7 logo
 LOGO_Y            = 0
-TITLE_X           = 10            ; column of "Commander X16"
+CAPTION_X         = 1             ; "Commander X16" under the logo
+CAPTION_Y         = 7
 
-WIN_TOP           = 8             ; row of the window's top border
-LIST_TOP          = 9             ; first row of the lists
-LIST_ROWS         = 48            ; rows 9..56 show list items
-SEP_ROW           = 57            ; line above the status line
-STATUS_ROW        = 58            ; current path and hint text
-WIN_BOTTOM        = 59            ; window's bottom border
+; the window
+WIN_L             = 1             ; left border column
+WIN_R             = 78            ; right border column
+WIN_T             = 9             ; top border row
+WIN_B             = 58            ; bottom border row
+TITLE_ROW         = 10            ; title bar
+CLIENT_TOP        = 11            ; first row inside, under the title
+LABEL_ROW         = 12            ; "Folders:" "Files:" "Preview:"
+BOX_T             = 13            ; top edge of the list boxes
+LIST_TOP          = 14            ; first row of the lists
+LIST_ROWS         = 41            ; rows 14..54 show list items
+BOX_B             = 55            ; bottom edge of the list boxes
+STATUS_ROW        = 57            ; status line (path and hint)
+STATUS_X          = 3             ; where the path starts
 
-LEFT_X            = 0             ; left border
-TREE_X            = 1             ; folder tree: columns 1..25
-TREE_W            = 25
-DIV1_X            = 26            ; divider between tree and files
-FILE_X            = 27            ; file list: columns 27..52
-FILE_W            = 26
-DIV2_X            = 53            ; divider between files and preview
-PREV_X            = 54            ; preview panel: columns 54..78
-PREV_W            = 25
-RIGHT_X           = 79            ; right border
+; the three boxes: _L/_R = left/right edge column, _X/_W = the
+; columns for text, _SB = the scroll bar column
+TREE_L            = 3
+TREE_X            = 4             ; folder names: columns 4..27
+TREE_W            = 24
+TREE_SB           = 28
+TREE_R            = 29
+FILE_L            = 31
+FILE_X            = 32            ; file names: columns 32..55
+FILE_W            = 24
+FILE_SB           = 56
+FILE_R            = 57
+PREV_L            = 59
+PREV_X            = 60            ; preview: columns 60..75
+PREV_W            = 16
+PREV_R            = 76
+
+; scroll bar: up arrow on the first list row, down arrow on the
+; last, and the track (where the thumb slides) in between
+TRACK_TOP         = LIST_TOP+1
+TRACK_ROWS        = LIST_ROWS-2
 
 SCROLL_STEP       = 3             ; lines per mouse wheel notch
-PAGE_STEP         = 24            ; lines per click on a scroll arrow
+PAGE_STEP         = LIST_ROWS-1   ; lines per click on the track
 DBLCLICK_TIME     = 30            ; two clicks within 30 jiffies (half a
                                   ; second) count as a double-click
+REPEAT_DELAY      = 20            ; frames before a held click repeats
+REPEAT_RATE       = 3             ; frames between repeats
 
-; Colours. In text mode every character cell has a colour byte:
-; the high nibble is the background colour, the low nibble is the
-; foreground (text) colour. The X16 default palette is:
-;   0 black   1 white   2 red     3 cyan    4 purple  5 green
-;   6 blue    7 yellow  8 orange  9 brown   A lt red  B dk grey
-;   C grey    D lt grn  E lt blue F lt grey
-COL_SCREEN        = $61           ; white on blue
-COL_BORDER        = $6E           ; light blue on blue
-COL_TITLE         = $61           ; white on blue
-COL_SUBTITLE      = $63           ; cyan on blue
-COL_DIR           = $61           ; folder names: white on blue
-COL_FILE          = $6F           ; other files: light grey on blue
-COL_PRG           = $67           ; programs: yellow on blue
-COL_SEL           = $E0           ; selected item: black on light blue
-COL_SEL_PRG       = $70           ; selected program: black on yellow
-COL_STATUS        = $6F           ; path: light grey on blue
-COL_HINT          = $6C           ; hint text: grey on blue
-COL_ERROR         = $6A           ; errors: light red on blue
+;------------------------------------------------------------------
+; Colours
+;
+; In text mode every character cell has a colour byte: the high
+; nibble is the background colour, the low nibble the foreground
+; (text) colour. Colours are entries 0-15 of the palette. At start-
+; up set_palette changes entries 9, A, B, C and F to the Windows 3.1
+; colours below (and restore_system puts them back). The others
+; keep the X16 defaults, which the logo uses.
+;
+;   0 (see below) 1 white  2 red      3 cyan     4 purple   5 green
+;   6 blue    7 yellow   8 orange   9 navy*    A teal*    B grey*
+;   C black*  D lt green E lt blue  F lt grey*      (* = changed)
+;
+; Colour 0 is never used: in this text mode colour 0 is see-through,
+; not black, so black is colour C instead.
+;------------------------------------------------------------------
+COL_DESKTOP       = $A1           ; white on teal
+COL_FRAME         = $FC           ; black on light grey
+COL_TITLE         = $91           ; white on navy
+COL_LABEL         = $FC           ; black on light grey
+COL_LIST          = $1C           ; black on white
+COL_PRG           = $16           ; blue on white
+COL_SEL           = $91           ; selected item: white on navy
+COL_SEL_PRG       = $97           ; selected program: yellow on navy
+COL_FOLDER        = $08           ; folder icon foreground: orange
+COL_EMPTY         = $1B           ; "(no files)": grey on white
+COL_ERROR         = $12           ; error in a list: red on white
+COL_STATUS        = $FC           ; status line: black on light grey
+COL_STATUS_ERR    = $F2           ; error on status line: red
 
 ;------------------------------------------------------------------
 ; Custom characters
 ;
-; We use the "upper/lower case" character set so that file names can
-; be shown in mixed case. That set has no diagonal shapes for the
-; logo, so at start-up we draw our own 8x8 characters (see "glyphs"
-; in SCREEN.ASM) over screen codes $80-$A2. Those codes are normally
-; reverse-video letters, which this program never uses.
+; We use the "upper/lower case" character set so file names can be
+; shown in mixed case. At start-up our own 8x8 shapes (see "glyphs"
+; in SCREEN.ASM) are drawn over screen codes $80-$AF, which are
+; normally reverse-video letters that this program never uses.
 ;------------------------------------------------------------------
 GLYPH_BASE        = $80           ; first replaced screen code
                                   ; $80-$92 are the logo pieces
-CH_TL             = $93           ; box drawing: top left corner
-CH_TR             = $94           ; top right corner
-CH_BL             = $95           ; bottom left corner
-CH_BR             = $96           ; bottom right corner
-CH_H              = $97           ; horizontal line
-CH_V              = $98           ; vertical line
-CH_LT             = $99           ; |- (left tee)
-CH_RT             = $9A           ; -| (right tee)
-CH_TT             = $9B           ; T  (top tee)
-CH_BT             = $9C           ; upside-down T (bottom tee)
-CH_UP             = $9E           ; scroll up arrow
-CH_DOWN           = $9F           ; scroll down arrow
-CH_FOLDER         = $A0           ; folder icon
-CH_PLUS           = $A1           ; [+] box
-CH_MINUS          = $A2           ; [-] box
-GLYPH_COUNT       = $A3 - GLYPH_BASE ; number of custom characters
+; window border (grey with a black line on each side)
+CH_W_TL           = $93           ; corners
+CH_W_TR           = $94
+CH_W_BL           = $95
+CH_W_BR           = $96
+CH_W_H            = $97           ; top/bottom border
+CH_W_V            = $98           ; left/right border
+CH_W_NL           = $99           ; notches near the corners
+CH_W_NR           = $9A
+CH_W_NT           = $9B
+CH_W_NB           = $9C
+; title bar
+CH_SYSBOX         = $9D           ; control-menu box
+CH_MIN            = $9E           ; minimise button
+CH_MAX            = $9F           ; maximise button
+CH_TOPLINE        = $A0           ; black line under the title bar
+; list box border (a thin black line)
+CH_LB_TL          = $A1
+CH_LB_T           = $A2
+CH_LB_TR          = $A3
+CH_LB_L           = $A4
+CH_LB_R           = $A5
+CH_LB_BL          = $A6
+CH_LB_B           = $A7
+CH_LB_BR          = $A8
+; scroll bar
+CH_SB_UP          = $A9           ; up arrow button
+CH_SB_DOWN        = $AA           ; down arrow button
+CH_SB_TRACK       = $AB           ; empty track
+CH_SB_THUMB       = $AC           ; the thumb
+; tree
+CH_FOLDER         = $AD           ; folder icon
+CH_PLUS           = $AE           ; [+] box
+CH_MINUS          = $AF           ; [-] box
+GLYPH_COUNT       = $B0 - GLYPH_BASE ; number of custom characters
 
 ;------------------------------------------------------------------
 ; Zero page variables. Only zero page locations can be used as
@@ -179,6 +242,7 @@ cur_color:        .res 1          ; colour used by put_char
 remain:           .res 1          ; characters left in the field being
                                   ;   drawn (stops long names spilling
                                   ;   into the next column)
+fill_n:           .res 1          ; count for hfill / vfill
 tmp:              .res 4          ; scratch bytes
 
 tree_count:       .res 1          ; number of nodes in the tree
@@ -197,6 +261,19 @@ click_row:        .res 1          ;   and rows (pixels / 8)
 last_click_idx:   .res 1          ; file clicked last time ($FF = none)
 last_click_time:  .res 1          ; clock value at that click
 
+hold_bar:         .res 1          ; scroll bar being held: 0 = none,
+                                  ;   1 = tree, 2 = files
+hold_drag:        .res 1          ; not 0 while dragging the thumb
+hold_timer:       .res 1          ; frames until the next repeat
+sb_first:         .res 1          ; not 0 for the first click of a hold
+sb_count:         .res 1          ; items in the list (scroll bar maths)
+sb_scroll:        .res 1          ; its scroll position
+mul_a:            .res 1          ; multiply / divide workspace
+mul_b:            .res 1
+mul_lo:           .res 1
+mul_hi:           .res 1
+div_d:            .res 1
+
 dir_error:        .res 1          ; not 0 if the folder couldn't be read
 
 file_order:       .res MAX_FILES  ; record numbers of the files, in
@@ -212,6 +289,7 @@ dos_status:       .res 2          ; first two digits of the DOS reply
 pathbuf:          .res 256        ; "/GAMES/ARCADE" for the status line
 chain:            .res MAX_DEPTH+1 ; nodes from the root down to the
                                   ;   folder being opened
+pal_save:         .res 32         ; the original palette entries 0-15
 
 ;------------------------------------------------------------------
 .segment "CODE"
@@ -220,9 +298,9 @@ chain:            .res MAX_DEPTH+1 ; nodes from the root down to the
 ; Program start
 ;==================================================================
 start:
-   jsr init_screen                ; 80x60 text, charset, clear screen
-   jsr draw_header                ; logo and title
-   jsr draw_frame                 ; window borders
+   jsr init_screen                ; text mode, palette, glyphs, desktop
+   jsr draw_desktop_icon          ; logo and caption
+   jsr draw_window                ; the window and its empty boxes
 
    ; Turn the mouse pointer on. SCREEN_MODE with carry set returns
    ; the screen size in X and Y, which is what MOUSE_CONFIG wants.
@@ -236,6 +314,7 @@ start:
    jsr tree_init
    stz tree_scroll
    stz prev_buttons
+   stz hold_bar
    lda #$FF                       ; no file clicked yet
    sta last_click_idx
 
@@ -294,16 +373,24 @@ main_loop:
    jsr handle_wheel
 @no_wheel:
 
-   ; React when the left button goes down: it was up last frame and
-   ; is down now. (Holding the button down doesn't repeat.)
-   lda prev_buttons
-   and #1
-   bne @no_click                  ; was already down
+   ; Left button. Three cases:
+   ;   up now                 -> stop any scroll bar hold
+   ;   down now, up before    -> a new click
+   ;   down now, down before  -> still held (repeat or drag)
    lda buttons
    and #1
-   beq @no_click                  ; is still up
+   beq @released
+   lda prev_buttons
+   and #1
+   bne @held
    jsr handle_click
-@no_click:
+   bra @buttons_done
+@held:
+   jsr handle_hold
+   bra @buttons_done
+@released:
+   stz hold_bar
+@buttons_done:
    lda buttons
    sta prev_buttons
    bra main_loop
@@ -320,8 +407,8 @@ quit:
 
 ;------------------------------------------------------------------
 ; handle_click - the left button was pressed at click_col/click_row.
-; Works out which column was clicked and passes the list position
-; on to tree_click or file_click, or scrolls if an arrow was hit.
+; Works out what was clicked and passes it on to tree_click,
+; file_click or sb_click.
 ;------------------------------------------------------------------
 handle_click:
    ; ignore clicks above or below the lists
@@ -332,17 +419,23 @@ handle_click:
    bcs @done
    sec
    sbc #LIST_TOP
-   sta tmp                        ; row within the list, 0..47
+   sta tmp                        ; row within the list, 0..40
 
    ; which column?
    lda click_col
-   cmp #DIV1_X
-   bcc @tree                      ; left of the first divider
-   beq @tree_arrows               ; on the first divider
-   cmp #DIV2_X
-   bcc @files                     ; between the dividers
-   beq @file_arrows               ; on the second divider
-@done:                            ; preview panel: nothing to do yet
+   cmp #TREE_X
+   bcc @done                      ; left of the tree
+   cmp #TREE_X+TREE_W
+   bcc @tree                      ; on a folder name
+   cmp #TREE_SB
+   beq @tree_sb                   ; on the tree's scroll bar
+   cmp #FILE_X
+   bcc @done                      ; between the boxes
+   cmp #FILE_X+FILE_W
+   bcc @files                     ; on a file name
+   cmp #FILE_SB
+   beq @file_sb                   ; on the files' scroll bar
+@done:                            ; anywhere else: nothing to do
    rts
 
 @tree:
@@ -365,31 +458,15 @@ handle_click:
    bcs @done                      ; empty row below the last file
    jmp file_click
 
-@tree_arrows:
-   ; the scroll arrows are on the top and bottom rows of the divider
-   lda tmp
-   beq @tree_up
-   cmp #LIST_ROWS-1
-   bne @done
-   lda #PAGE_STEP                 ; bottom arrow: scroll down a page
-   jmp scroll_tree
-@tree_up:
-   lda #256-PAGE_STEP             ; top arrow: scroll up (negative)
-   jmp scroll_tree
-
-@file_arrows:
-   lda tmp
-   beq @file_up
-   cmp #LIST_ROWS-1
-   bne @done
-   lda #PAGE_STEP
-   jmp scroll_files
-@file_up:
-   lda #256-PAGE_STEP
-   jmp scroll_files
+@tree_sb:
+   lda #1
+   jmp sb_click
+@file_sb:
+   lda #2
+   jmp sb_click
 
 ;------------------------------------------------------------------
-; handle_wheel - scroll the column under the mouse pointer.
+; handle_wheel - scroll the list under the mouse pointer.
 ; The wheel value is negative when rolled away from you (scroll up)
 ; and positive when rolled towards you (scroll down).
 ;------------------------------------------------------------------
@@ -400,23 +477,24 @@ handle_wheel:
    ldy #256-SCROLL_STEP           ; up (negative number)
 :  tya
    ldx click_col
-   cpx #DIV1_X+1
+   cpx #TREE_R+1
    bcc scroll_tree                ; pointer is over the tree
-   cpx #DIV2_X+1
+   cpx #FILE_R+1
    bcc scroll_files               ; pointer is over the files
    rts
 
 ;------------------------------------------------------------------
-; scroll_tree / scroll_files
-; In: A = number of lines to scroll (negative = up). Redraws the
-; column if the scroll position actually changed.
+; scroll_tree / scroll_files - scroll a list by A lines (negative =
+; up), redrawing it if the position changed.
+; set_tree_scroll / set_file_scroll - scroll to position A.
 ;------------------------------------------------------------------
 scroll_tree:
    ldx tree_count
    ldy tree_scroll
    jsr calc_scroll
+set_tree_scroll:
    cmp tree_scroll
-   beq :+
+   beq :+                         ; no change: nothing to redraw
    sta tree_scroll
    jsr draw_tree
 :  rts
@@ -425,6 +503,7 @@ scroll_files:
    ldx file_count
    ldy file_scroll
    jsr calc_scroll
+set_file_scroll:
    cmp file_scroll
    beq :+
    sta file_scroll
@@ -437,7 +516,7 @@ scroll_files:
 ;      X = number of items in the list
 ;      Y = current scroll position
 ; Out: A = new scroll position, kept between 0 and the last position
-;      that still fills the column (count - LIST_ROWS).
+;      that still fills the list (count - LIST_ROWS).
 ;------------------------------------------------------------------
 calc_scroll:
    sty tmp+1
@@ -467,6 +546,243 @@ calc_scroll:
    bcc :+                         ; largest < wanted: use largest
    lda tmp+1                      ; otherwise use wanted
 :  rts
+
+;==================================================================
+; Scroll bars
+;
+; A scroll bar is one column: an up arrow on the first list row, a
+; down arrow on the last, and the track in between, where the thumb
+; shows how far down the list is scrolled.
+;
+;   click an arrow        scroll one line
+;   click above the thumb scroll up a page
+;   click below the thumb scroll down a page
+;   hold the button       repeat (after REPEAT_DELAY frames)
+;   press on the thumb    drag it; the list follows the pointer
+;
+; The bars are numbered 1 (tree) and 2 (files).
+;==================================================================
+
+;------------------------------------------------------------------
+; sb_click - the button went down on a scroll bar
+; In: A = bar number, click_row = where
+;------------------------------------------------------------------
+sb_click:
+   sta hold_bar                   ; remember it for handle_hold
+   stz hold_drag
+   lda #REPEAT_DELAY
+   sta hold_timer
+   lda #1
+   sta sb_first
+   jmp sb_action
+
+;------------------------------------------------------------------
+; handle_hold - the button is still down. Repeat the scroll bar
+; action now and then, or follow the pointer when dragging.
+;------------------------------------------------------------------
+handle_hold:
+   lda hold_bar
+   beq @done                      ; not holding a scroll bar
+   lda hold_drag
+   bne sb_drag
+   dec hold_timer
+   bne @done
+   lda #REPEAT_RATE               ; time for a repeat
+   sta hold_timer
+   stz sb_first                   ; (a repeat never starts a drag)
+   jmp sb_action
+@done:
+   rts
+
+;------------------------------------------------------------------
+; sb_action - act on a click at click_row on scroll bar hold_bar
+;------------------------------------------------------------------
+sb_action:
+   lda click_row
+   cmp #LIST_TOP
+   beq @line_up                   ; up arrow
+   bcc @done                      ; (pointer moved above the bar)
+   cmp #LIST_TOP+LIST_ROWS-1
+   beq @line_down                 ; down arrow
+   bcs @done                      ; (pointer moved below the bar)
+
+   ; on the track: compare with the thumb's row
+   jsr sb_load
+   jsr thumb_row
+   bcs @done                      ; list doesn't scroll: no thumb
+   cmp click_row
+   beq @on_thumb
+   bcc @page_down                 ; thumb is above the pointer
+   lda #256-PAGE_STEP             ; thumb is below: page up
+   bra sb_scroll_by
+@page_down:
+   lda #PAGE_STEP
+   bra sb_scroll_by
+@on_thumb:
+   lda sb_first                   ; pressing on the thumb starts a
+   sta hold_drag                  ;   drag (a repeat doesn't)
+@done:
+   rts
+@line_up:
+   lda #$FF                       ; -1
+   bra sb_scroll_by
+@line_down:
+   lda #1
+   ; fall through
+
+; sb_scroll_by - scroll the held bar's list by A lines
+sb_scroll_by:
+   ldx hold_bar
+   cpx #1
+   bne :+
+   jmp scroll_tree
+:  jmp scroll_files
+
+;------------------------------------------------------------------
+; sb_drag - dragging the thumb: scroll so the thumb is under the
+; pointer.  position = row on track * largest position / (rows-1)
+;------------------------------------------------------------------
+sb_drag:
+   jsr sb_load
+   lda sb_count                   ; largest scroll position
+   sec
+   sbc #LIST_ROWS
+   bcc @done                      ; list doesn't scroll
+   beq @done
+   sta div_d
+
+   ; pointer's row on the track, kept inside the track
+   lda click_row
+   sec
+   sbc #TRACK_TOP
+   bcs :+
+   lda #0                         ; above the track
+:  cmp #TRACK_ROWS
+   bcc :+
+   lda #TRACK_ROWS-1              ; below the track
+:
+   ; (row * largest + half a step) / (TRACK_ROWS-1), rounded
+   ldx div_d
+   jsr mul8
+   lda mul_lo
+   clc
+   adc #(TRACK_ROWS-1)/2
+   sta mul_lo
+   bcc :+
+   inc mul_hi
+:  lda #TRACK_ROWS-1
+   jsr div16_8
+
+   ldx hold_bar
+   cpx #1
+   bne :+
+   jmp set_tree_scroll
+:  jmp set_file_scroll
+@done:
+   rts
+
+;------------------------------------------------------------------
+; sb_load - copy the held bar's item count and scroll position into
+; sb_count and sb_scroll
+;------------------------------------------------------------------
+sb_load:
+   ldx hold_bar
+   cpx #1
+   bne @files
+   lda tree_count
+   ldy tree_scroll
+   bra @store
+@files:
+   lda file_count
+   ldy file_scroll
+@store:
+   sta sb_count
+   sty sb_scroll
+   rts
+
+;------------------------------------------------------------------
+; thumb_row - which screen row the thumb is on
+; In:  sb_count, sb_scroll
+; Out: C = 1 if the list is too short to scroll (no thumb), else
+;      C = 0 and A = TRACK_TOP + scroll * (TRACK_ROWS-1) / largest
+;------------------------------------------------------------------
+thumb_row:
+   lda sb_count
+   sec
+   sbc #LIST_ROWS                 ; largest scroll position
+   bcc @none
+   beq @none
+   pha
+   lda sb_scroll
+   ldx #TRACK_ROWS-1
+   jsr mul8                       ; scroll * (TRACK_ROWS-1)
+   pla
+   jsr div16_8                    ;   / largest
+   clc
+   adc #TRACK_TOP
+   clc
+   rts
+@none:
+   sec
+   rts
+
+;------------------------------------------------------------------
+; mul8 - multiply: mul_hi:mul_lo = A * X
+; Works like long multiplication in binary: for each bit of A, from
+; the top, double the result and add X if the bit is 1.
+;------------------------------------------------------------------
+mul8:
+   sta mul_a
+   stx mul_b
+   stz mul_lo
+   stz mul_hi
+   ldx #8
+@loop:
+   asl mul_lo                     ; result * 2
+   rol mul_hi
+   asl mul_a                      ; next bit of A into carry
+   bcc @next
+   clc
+   lda mul_lo                     ; bit was 1: result + X
+   adc mul_b
+   sta mul_lo
+   bcc @next
+   inc mul_hi
+@next:
+   dex
+   bne @loop
+   rts
+
+;------------------------------------------------------------------
+; div16_8 - divide: A = mul_hi:mul_lo / A
+; The answer must fit in 8 bits (mul_hi less than the divisor),
+; which is always true for the scroll bar sums. Works like long
+; division in binary: shift the number left a bit at a time into
+; A; whenever A is at least the divisor, subtract it and set that
+; bit of the answer (which builds up in mul_lo as it shifts out).
+;------------------------------------------------------------------
+div16_8:
+   sta div_d
+   ldx #8
+   lda mul_hi
+@loop:
+   asl mul_lo                     ; next bit into A
+   rol a
+   bcs @sub                       ; 9th bit set: certainly big enough
+   cmp div_d
+   bcc @next                      ; too small
+@sub:
+   sbc div_d                      ; (carry is set here)
+   inc mul_lo                     ; answer bit = 1
+@next:
+   dex
+   bne @loop
+   lda mul_lo
+   rts
+
+;==================================================================
+; Clicking in the lists
+;==================================================================
 
 ;------------------------------------------------------------------
 ; file_click - a file was clicked
@@ -626,15 +942,16 @@ ensure_tree_visible:
 
 ;------------------------------------------------------------------
 ; restore_system - put things back the way BASIC expects them:
-; mouse pointer off, RAM bank 0, default I/O channels, and SCINIT
-; (the KERNAL's CINT) resets the screen mode, colours and character
-; set, and clears the screen.
+; mouse pointer off, the original palette, RAM bank 0, default I/O
+; channels, and SCINIT (the KERNAL's CINT) resets the screen mode,
+; colours and character set, and clears the screen.
 ;------------------------------------------------------------------
 restore_system:
    lda #0
    ldx #0
    ldy #0
    jsr MOUSE_CONFIG               ; A = 0: hide the mouse pointer
+   jsr restore_palette
    stz RAM_BANK
    jsr CLRCHN
    jmp SCINIT

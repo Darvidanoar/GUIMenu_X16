@@ -185,12 +185,12 @@ read_load_address:
 ; path (the next folder change puts the path back)
 ;------------------------------------------------------------------
 launch_failed:
-   ldx #LEFT_X+2
+   ldx #STATUS_X
    ldy #STATUS_ROW
    jsr set_cursor
-   lda #COL_ERROR
+   lda #COL_STATUS_ERR
    sta cur_color
-   lda #RIGHT_X-(str_hint_end-str_hint)-LEFT_X-3
+   lda #STATUS_W
    sta remain
    lda #<str_load_error
    sta sptr

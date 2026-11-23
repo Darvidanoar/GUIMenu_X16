@@ -2,18 +2,19 @@
 
 A mouse-driven program launcher for the [Commander X16](https://www.commanderx16.com/), written in 6502 assembly.
 
-Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it.
+Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it. It's styled after a Windows 3.1 window.
 
 ![GUIMenu running in the X16 emulator](docs/screenshot.png)
 
 ## Features
 
 - **Folder tree:** shows the folders on the SD card. Click a folder to open it. Click its `[+]`/`[-]` box to expand or collapse it.
-- **File list:** shows the files in the open folder, sorted alphabetically. Programs (`.PRG`) are shown in yellow.
+- **File list:** shows the files in the open folder, sorted alphabetically. Programs (`.PRG`) are shown in blue.
 - **Double-click to run:** double-click a `.PRG` to load and run it. The program starts in its own folder, so it can find its data files.
-- **Scrolling:** the mouse wheel scrolls the column under the pointer. The arrows on the column dividers scroll a page at a time.
+- **Scroll bars:** click the arrows to scroll a line (hold to repeat), click the track to scroll a page, or drag the thumb. The mouse wheel scrolls the list under the pointer.
+- **Windows 3.1 look:** a teal desktop, a window with a sizing border, a navy title bar, white list boxes and a status line. The control box and minimise/maximise buttons are decoration only.
 - **Status line:** shows the path of the open folder, e.g. `/GAMES/ARCADE`.
-- **Header:** the Commander X16 logo, as shown on the boot screen.
+- **Desktop icon:** the Commander X16 logo, as shown on the boot screen, captioned "Commander X16".
 - **Preview panel:** reserved for showing an image of the selected program (not implemented yet).
 
 ## Requirements
@@ -64,8 +65,10 @@ To start the launcher automatically, save it on the SD card as `AUTOBOOT.X16`.
 | Click a folder's `[+]` / `[-]` box | Expand or collapse the folder |
 | Click a file | Highlight it |
 | Double-click a `.PRG` | Load and run it |
-| Mouse wheel | Scroll the column under the pointer |
-| Click a scroll arrow on a divider | Scroll a page up or down |
+| Click a scroll bar arrow | Scroll one line (hold to repeat) |
+| Click the scroll bar track | Scroll a page up or down |
+| Drag the scroll bar thumb | Scroll to that position |
+| Mouse wheel | Scroll the list under the pointer |
 | `Q`, `ESC` or `RUN/STOP` | Quit to BASIC |
 
 ## How programs are launched
@@ -85,8 +88,8 @@ Most X16 programs load at `$0801`, which is where GUIMenu is running. So GUIMenu
 
 | File | Contents |
 | --- | --- |
-| `GUIMENU.ASM` | Constants, variables, start-up, main loop, mouse handling |
-| `SCREEN.ASM` | All screen drawing, the logo and the custom characters |
+| `GUIMENU.ASM` | Constants, variables, start-up, main loop, mouse handling, scroll bars |
+| `SCREEN.ASM` | All screen drawing, the palette, the logo and the custom characters |
 | `TREE.ASM` | The folder tree and record storage in banked RAM |
 | `DOS.ASM` | DOS commands and reading directory listings |
 | `LAUNCH.ASM` | Loading and running the chosen program |
