@@ -12,7 +12,7 @@ Browse the folders on your SD card, see the files in each one, and double-click 
 - **File list:** shows the files in the open folder, sorted alphabetically. Programs (`.PRG`) are shown in blue.
 - **Double-click to run:** double-click a `.PRG` to load and run it. The program starts in its own folder, so it can find its data files.
 - **Scroll bars:** click the arrows to scroll a line (hold to repeat), click the track to scroll a page, or drag the thumb. The mouse wheel scrolls the list under the pointer.
-- **Windows 3.1 look:** a teal desktop, a window with a sizing border, a navy title bar, white list boxes and a status line. The control box and minimise/maximise buttons are decoration only.
+- **Windows 3.1 look:** a dark blue desktop, a window with a sizing border, a navy title bar, white list boxes and a status line. The control box and minimise/maximise buttons are decoration only.
 - **Status line:** shows the path of the open folder, e.g. `/GAMES/ARCADE`.
 - **Desktop icon:** the Commander X16 logo, as shown on the boot screen, captioned "Commander X16".
 - **Preview panel:** reserved for showing an image of the selected program (not implemented yet).

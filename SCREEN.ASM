@@ -56,7 +56,7 @@ TITLE_TEXT_X      = WIN_L + 2 + (WIN_R - WIN_L - 4 - (str_wtitle_end - str_wtitl
 
 ;------------------------------------------------------------------
 ; init_screen - 80x60 text mode, upper/lower case character set,
-; our palette and custom characters, and an empty teal desktop.
+; our palette and custom characters, and an empty dark blue desktop.
 ;------------------------------------------------------------------
 init_screen:
    lda #0                         ; screen mode 0 = 80x60 text
@@ -149,7 +149,7 @@ restore_palette:
 ; Each of R, G, B goes from 0 (none) to F (full).
 pal_new:
    .byte $09, $08, $00            ; 9 navy       #008
-   .byte $0A, $88, $00            ; A teal       #088
+   .byte $0A, $04, $00            ; A dark blue  #004
    .byte $0B, $88, $08            ; B grey       #888
    .byte $0C, $00, $00            ; C black      #000
    .byte $0F, $CC, $0C            ; F light grey #CCC
@@ -853,7 +853,7 @@ draw_files:
    jsr load_rec                   ; copy it into recbuf
 
    ; pick colours: X = normal colour, Y = highlighted colour
-   ldx #COL_LIST
+   ldx #COL_FILE                  ; an ordinary file: grey
    ldy #COL_SEL
    lda recbuf+REC_FLAGS
    and #FLAG_PRG
@@ -964,7 +964,7 @@ logo:
    .byte $8D,$85,$8E,$20,$8F,$85,$90
    .byte $91,$8E,$20,$20,$20,$8F,$92
 
-; colour of each logo row, on the teal desktop:
+; colour of each logo row, on the dark blue desktop:
 ; purple, light blue, cyan, green, yellow, orange, red
 logo_colors:
    .byte $A4,$AE,$A3,$A5,$A7,$A8,$A2
@@ -1038,6 +1038,6 @@ glyphs:
    .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $AB track
    .byte $FF,$80,$BE,$BE,$BE,$BE,$80,$FF   ; $AC thumb
    ; ---- $AD-$AF: tree ----
-   .byte $00,$E0,$9F,$81,$81,$81,$FF,$00   ; $AD folder icon
+   .byte $00,$E0,$FF,$FF,$FF,$FF,$FF,$00   ; $AD folder icon (filled)
    .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $AE [+] box
    .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $AF [-] box

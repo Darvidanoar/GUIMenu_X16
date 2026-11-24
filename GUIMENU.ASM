@@ -2,7 +2,7 @@
 ; X16 GUI Menu
 ;
 ; A mouse driven program launcher for the Commander X16, styled
-; after a Windows 3.1 window on a teal desktop.
+; after a Windows 3.1 window on a dark blue desktop.
 ;
 ;   [logo]                                     <- desktop icon
 ;   Commander X16
@@ -156,17 +156,18 @@ REPEAT_RATE       = 3             ; frames between repeats
 ; keep the X16 defaults, which the logo uses.
 ;
 ;   0 (see below) 1 white  2 red      3 cyan     4 purple   5 green
-;   6 blue    7 yellow   8 orange   9 navy*    A teal*    B grey*
+;   6 blue    7 yellow   8 orange   9 navy*    A dk blue* B grey*
 ;   C black*  D lt green E lt blue  F lt grey*      (* = changed)
 ;
 ; Colour 0 is never used: in this text mode colour 0 is see-through,
 ; not black, so black is colour C instead.
 ;------------------------------------------------------------------
-COL_DESKTOP       = $A1           ; white on teal
+COL_DESKTOP       = $A1           ; white on dark blue
 COL_FRAME         = $FC           ; black on light grey
 COL_TITLE         = $91           ; white on navy
 COL_LABEL         = $FC           ; black on light grey
 COL_LIST          = $1C           ; black on white
+COL_FILE          = $1B           ; ordinary file: mid grey on white
 COL_PRG           = $16           ; blue on white
 COL_SEL           = $91           ; selected item: white on navy
 COL_SEL_PRG       = $97           ; selected program: yellow on navy
