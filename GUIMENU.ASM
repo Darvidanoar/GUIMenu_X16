@@ -2,35 +2,49 @@
 ; X16 GUI Menu
 ;
 ; A mouse driven program launcher for the Commander X16, styled
-; after a Windows 3.1 window on a dark blue desktop.
+; after an Amiga Workbench 2.0/3.1 window on a dark blue desktop.
 ;
 ;   [ COMMANDER X16 logo ]                     <- desktop logo, an
 ;                                                   image shown with
 ;                                                   sprites
-;  +==========================================================+
-;  |[-]            SD Card Program Launcher             [v][^]|
-;  |----------------------------------------------------------|
-;  |  Folders:              Files:                 Preview:   |
+;  +----------------------------------------------------------+
+;  |[o]| SD Card Program Launcher                   |[=]|[#]| <- blue
+;  |----------------------------------------------------------|  title
+;  |  Folders:              Files:                 Preview:   |  bar
 ;  |  +---------------+-+   +---------------+-+   +---------+ |
-;  |  |[-] SD Card    |^|   | HELLO.PRG     |^|   |         | |
+;  |  |[-] SD Card    |#|   | HELLO.PRG     | |   |         | |
 ;  |  | [+] GAMES     | |   | readme.txt    |#|   |         | |
-;  |  | [+] TOOLS     |v|   |               |v|   |         | |
+;  |  | [+] TOOLS     |^|   |               |^|   |         | |
+;  |  |               |v|   |               |v|   |         | |
 ;  |  +---------------+-+   +---------------+-+   +---------+ |
 ;  |  /GAMES                    Double-click a program ...     |
-;  +==========================================================+
+;  +----------------------------------------------------------+
+;
+; Like Workbench, everything is grey with 3D edges: a light (white)
+; edge at the top and left and a dark (black) one at the bottom and
+; right makes a thing look raised (the window); the other way round
+; makes it look sunken (the list boxes).
 ;
 ;   - Left list:   a tree of the folders on the SD card.
 ;                  Click a folder name to open it.
 ;                  Click its [+]/[-] box to expand or collapse it.
 ;   - Middle list: the files in the open folder. Programs (.PRG)
-;                  are shown in blue. Double-click one to run it.
+;                  are listed first, in blue. Double-click one to
+;                  run it.
 ;   - Right panel: preview (empty for now).
-;   - Scroll bars: click the arrows to scroll a line (hold to
+;   - Scroll bars: as on the Amiga, both arrows are at the bottom.
+;                  Click the arrows to scroll a line (hold to
 ;                  repeat), click the track above/below the thumb
 ;                  to scroll a page, or drag the thumb. The mouse
 ;                  wheel scrolls the list under the pointer.
-;   - The window's control box and minimise/maximise buttons are
-;     only decoration.
+;   - The window's close, zoom and depth gadgets are only
+;     decoration.
+;   - Keyboard: Tab switches between the folder and file lists
+;     (the one with the blue highlight bar has the "focus"). Up,
+;     Down, Page Up, Page Down, Home and End move through it;
+;     moving in the folder list opens that folder. Right opens the
+;     first sub-folder of the open folder and Left opens its parent,
+;     whichever list has the focus. RETURN on a program runs it.
 ;   - Q, ESC or RUN/STOP quits back to BASIC.
 ;
 ; Source files (all assembled together as one unit, see the
@@ -61,7 +75,7 @@ KBDBUF_PUT        := $FEC3
 ;
 ; The X16 has 8 KB "windows" of banked RAM at $A000-$BFFF. Writing a
 ; bank number to RAM_BANK ($00) chooses which 8 KB bank appears
-; there. Bank 0 is used by the KERNAL and DOS, so we use banks 1-4.
+; there. Bank 0 is used by the KERNAL and DOS, so we use banks 1-5.
 ;
 ; Every folder name and file name is stored as a 64 byte "record",
 ; so one 8 KB bank holds 128 records:
@@ -72,8 +86,8 @@ KBDBUF_PUT        := $FEC3
 ;   bytes 2-63 REC_NAME   the name, ending with a 0 byte
 ;------------------------------------------------------------------
 TREE_BANK         = 1             ; banks 1-2 : folder tree nodes
-FILE_BANK         = 3             ; bank 3    : files in current folder
-TDIR_BANK         = 4             ; bank 4    : sub-folders just read
+FILE_BANK         = 3             ; banks 3-4 : files in current folder
+TDIR_BANK         = 5             ; bank 5    : sub-folders just read
 
 REC_DEPTH         = 0             ; offsets inside a record
 REC_FLAGS         = 1
@@ -81,7 +95,11 @@ REC_NAME          = 2
 NAME_MAX          = 61            ; longest name we keep (+1 for the 0)
 
 MAX_TREE          = 250           ; most folders the tree can show
-MAX_FILES         = 128           ; most files listed for one folder
+MAX_FILES         = 255           ; most files listed for one folder
+                                  ;   (255 fits in a byte, and $FF
+                                  ;   still means "no file"). If a
+                                  ;   folder has more, programs are
+                                  ;   kept and other files dropped.
 MAX_TDIRS         = 128           ; most sub-folders read for one folder
 MAX_DEPTH         = 30            ; deepest folder level we will open
 
@@ -109,20 +127,23 @@ LOGO_VRAM         = $04000        ; where the sprite pixels go in VRAM
                                   ;   (unused in text mode)
 LOGO_PAL_FIRST    = 128           ; logo colours: palette entries 128-255
 
-; the window
+; the window. Its raised outer edge is drawn on the desktop cells
+; just outside it (row WIN_T-1, row WIN_B+1, and the columns either
+; side), so the window must not touch the screen edges.
 WIN_L             = 1             ; left border column
 WIN_R             = 78            ; right border column
-WIN_T             = 9             ; top border row
+WIN_T             = 9             ; top row = the title bar
 WIN_B             = 58            ; bottom border row
-TITLE_ROW         = 10            ; title bar
-CLIENT_TOP        = 11            ; first row inside, under the title
-LABEL_ROW         = 12            ; "Folders:" "Files:" "Preview:"
-BOX_T             = 13            ; top edge of the list boxes
-LIST_TOP          = 14            ; first row of the lists
-LIST_ROWS         = 41            ; rows 14..54 show list items
+LABEL_ROW         = 11            ; "Folders:" "Files:" "Preview:"
+BOX_T             = 12            ; top edge of the list boxes
+LIST_TOP          = 13            ; first row of the lists
+LIST_ROWS         = 42            ; rows 13..54 show list items
 BOX_B             = 55            ; bottom edge of the list boxes
 STATUS_ROW        = 57            ; status line (path and hint)
 STATUS_X          = 3             ; where the path starts
+
+.assert WIN_L >= 1 && WIN_R <= 78 && WIN_T >= 1 && WIN_B <= 58, error, "window must leave room for its outer edge"
+.assert BOX_B = LIST_TOP + LIST_ROWS, error, "list box bottom must be just below the list"
 
 ; the three boxes: _L/_R = left/right edge column, _X/_W = the
 ; columns for text, _SB = the scroll bar column
@@ -141,10 +162,13 @@ PREV_X            = 60            ; preview: columns 60..75
 PREV_W            = 16
 PREV_R            = 76
 
-; scroll bar: up arrow on the first list row, down arrow on the
-; last, and the track (where the thumb slides) in between
-TRACK_TOP         = LIST_TOP+1
+; scroll bar, Amiga style: the track (where the thumb slides) from
+; the first list row down, then the up and down arrows together at
+; the bottom
+TRACK_TOP         = LIST_TOP
 TRACK_ROWS        = LIST_ROWS-2
+SB_UP_ROW         = LIST_TOP+LIST_ROWS-2
+SB_DOWN_ROW       = LIST_TOP+LIST_ROWS-1
 
 SCROLL_STEP       = 3             ; lines per mouse wheel notch
 PAGE_STEP         = LIST_ROWS-1   ; lines per click on the track
@@ -153,37 +177,62 @@ DBLCLICK_TIME     = 30            ; two clicks within 30 jiffies (half a
 REPEAT_DELAY      = 20            ; frames before a held click repeats
 REPEAT_RATE       = 3             ; frames between repeats
 
+FOCUS_TREE        = 0             ; which list the keyboard moves in
+FOCUS_FILES       = 1             ;   (see the "focus" variable)
+
+; Key codes returned by GETIN (PETSCII, plus the X16's extra keys)
+KEY_RUNSTOP       = $03
+KEY_TAB           = $09
+KEY_SHIFT_TAB     = $18
+KEY_RETURN        = $0D
+KEY_ESC           = $1B
+KEY_UP            = $91
+KEY_DOWN          = $11
+KEY_LEFT          = $9D
+KEY_RIGHT         = $1D
+KEY_HOME          = $13
+KEY_END           = $04
+KEY_PGUP          = $82
+KEY_PGDN          = $02
+
 ;------------------------------------------------------------------
 ; Colours
 ;
 ; In text mode every character cell has a colour byte: the high
 ; nibble is the background colour, the low nibble the foreground
 ; (text) colour. Colours are entries 0-15 of the palette. At start-
-; up set_palette changes entries 9, A, B, C and F to the Windows 3.1
-; colours below, and entries 128-255 to the logo's colours (and
-; restore_system puts them all back). The others keep the X16
-; defaults.
+; up set_palette changes entries 6, 9, A, B, C and F to the colours
+; below (9 and F are Workbench's blue and grey), and entries
+; 128-255 to the logo's colours (and restore_system puts them all
+; back). The others keep the X16 defaults.
 ;
 ;   0 (see below) 1 white  2 red      3 cyan     4 purple   5 green
-;   6 blue    7 yellow   8 orange   9 navy*    A dk blue* B grey*
-;   C black*  D lt green E lt blue  F lt grey*      (* = changed)
+;   6 blue*   7 yellow   8 orange   9 Amiga blue* A dk blue* B dk grey*
+;   C black*  D lt green E lt blue  F Amiga grey*   (* = changed)
 ;
 ; Colour 0 is never used: in this text mode colour 0 is see-through,
 ; not black, so black is colour C instead.
 ;------------------------------------------------------------------
 COL_DESKTOP       = $A1           ; white on dark blue
-COL_FRAME         = $FC           ; black on light grey
-COL_TITLE         = $91           ; white on navy
-COL_LABEL         = $FC           ; black on light grey
-COL_LIST          = $1C           ; black on white
-COL_FILE          = $1B           ; ordinary file: grey on white
-COL_PRG           = $16           ; blue on white
-COL_SEL           = $91           ; selected item: white on navy
-COL_SEL_PRG       = $97           ; selected program: yellow on navy
+COL_OUT_LIGHT     = $A1           ; window's outer edge, drawn on the
+COL_OUT_DARK      = $AC           ;   desktop: white / black
+COL_LIGHT         = $F1           ; light edge: white on grey
+COL_DARK          = $FC           ; dark edge: black on grey
+COL_FRAME         = $FC           ; scroll bars: black on grey
+COL_TITLE         = $9C           ; title bar: black on Amiga blue
+COL_LABEL         = $FC           ; black on grey
+COL_LIST          = $FC           ; list rows: black on grey
+COL_FILE          = $FC           ; ordinary file: black on grey
+COL_PRG           = $F6           ; program: medium-dark blue on grey
+COL_SEL           = $9C           ; selected item: black on blue
+COL_SEL_PRG       = $91           ; selected program: white on blue
+COL_SEL_DIM       = $B1           ; selected item in the list without
+                                  ;   the keyboard focus: white on
+                                  ;   dark grey
 COL_FOLDER        = $08           ; folder icon foreground: orange
-COL_EMPTY         = $1B           ; "(no files)": grey on white
-COL_ERROR         = $12           ; error in a list: red on white
-COL_STATUS        = $FC           ; status line: black on light grey
+COL_EMPTY         = $FB           ; "(no files)": dark grey on grey
+COL_ERROR         = $F2           ; error in a list: red on grey
+COL_STATUS        = $FC           ; status line: black on grey
 COL_STATUS_ERR    = $F2           ; error on status line: red
 
 ;------------------------------------------------------------------
@@ -191,46 +240,40 @@ COL_STATUS_ERR    = $F2           ; error on status line: red
 ;
 ; We use the "upper/lower case" character set so file names can be
 ; shown in mixed case. At start-up our own 8x8 shapes (see "glyphs"
-; in SCREEN.ASM) are drawn over screen codes $80-$9C, which are
+; in SCREEN.ASM) are drawn over screen codes $80-$93, which are
 ; normally reverse-video letters that this program never uses.
 ;------------------------------------------------------------------
 GLYPH_BASE        = $80           ; first replaced screen code
-; window border (grey with a black line on each side)
-CH_W_TL           = $80           ; corners
-CH_W_TR           = $81
-CH_W_BL           = $82
-CH_W_BR           = $83
-CH_W_H            = $84           ; top/bottom border
-CH_W_V            = $85           ; left/right border
-CH_W_NL           = $86           ; notches near the corners
-CH_W_NR           = $87
-CH_W_NT           = $88
-CH_W_NB           = $89
-; title bar
-CH_SYSBOX         = $8A           ; control-menu box
-CH_MIN            = $8B           ; minimise button
-CH_MAX            = $8C           ; maximise button
-CH_TOPLINE        = $8D           ; black line under the title bar
-; list box border (a thin black line)
-CH_LB_TL          = $8E
-CH_LB_T           = $8F
-CH_LB_TR          = $90
-CH_LB_L           = $91
-CH_LB_R           = $92
-CH_LB_BL          = $93
-CH_LB_B           = $94
-CH_LB_BR          = $95
-; scroll bar
-CH_SB_UP          = $96           ; up arrow button
-CH_SB_DOWN        = $97           ; down arrow button
-CH_SB_TRACK       = $98           ; empty track
-CH_SB_THUMB       = $99           ; the thumb
-; tree
-CH_FOLDER         = $9A           ; folder icon
-CH_PLUS           = $9B           ; [+] box
-CH_MINUS          = $9C           ; [-] box
 
-GLYPH_COUNT       = $9D - GLYPH_BASE ; number of custom characters
+; Edges. Each cell can only have two colours, but where a white edge
+; meets a black one a corner would need three (white, black and the
+; grey inside). So the edges are thin lines along one side of a
+; cell, and each line is drawn in whichever cell lets it use just
+; one colour; the same shapes are used in white and in black.
+CH_E_R            = $80           ; line down the right-hand side
+CH_E_L            = $81           ; line down the left-hand side
+CH_E_B            = $82           ; line along the bottom
+CH_E_T            = $83           ; line along the top
+CH_C_BR           = $84           ; one dot in the bottom right corner
+CH_C_BL           = $85           ; one dot in the bottom left corner
+CH_C_TR           = $86           ; one dot in the top right corner
+CH_C_TL           = $87           ; one dot in the top left corner
+; title bar gadgets, each 2 characters wide
+CH_CLOSE          = $88           ; $88-$89 close gadget
+CH_ZOOM           = $8A           ; $8A-$8B zoom gadget
+CH_DEPTH          = $8C           ; $8C-$8D depth gadget
+; scroll bar
+CH_SB_UP          = $8E           ; up arrow button
+CH_SB_DOWN        = $8F           ; down arrow button
+CH_SB_THUMB       = $90           ; the thumb
+CH_SB_TRACK       = CH_E_L        ; empty track: just a line down the
+                                  ;   left, between it and the list
+; tree
+CH_FOLDER         = $91           ; folder icon
+CH_PLUS           = $92           ; [+] box
+CH_MINUS          = $93           ; [-] box
+
+GLYPH_COUNT       = $94 - GLYPH_BASE ; number of custom characters
 
 ;------------------------------------------------------------------
 ; Zero page variables. Only zero page locations can be used as
@@ -238,7 +281,6 @@ GLYPH_COUNT       = $9D - GLYPH_BASE ; number of custom characters
 ;------------------------------------------------------------------
 .segment "ZEROPAGE"
 ptr:              .res 2          ; points at a record in banked RAM
-ptr2:             .res 2          ; second record pointer (sorting)
 sptr:             .res 2          ; points at a string to print
 optr:             .res 2          ; points at the order array to sort
 mouse_x:          .res 2          ; mouse position in pixels, filled
@@ -285,6 +327,8 @@ mul_hi:           .res 1
 div_d:            .res 1
 
 dir_error:        .res 1          ; not 0 if the folder couldn't be read
+focus:            .res 1          ; FOCUS_TREE or FOCUS_FILES
+key_delta:        .res 1          ; how far a key moves the selection
 
 file_order:       .res MAX_FILES  ; record numbers of the files, in
                                   ;   sorted order (programs first)
@@ -326,6 +370,8 @@ start:
    stz tree_scroll
    stz prev_buttons
    stz hold_bar
+   lda #FOCUS_TREE                ; the keyboard starts in the tree
+   sta focus
    lda #$FF                       ; no file clicked yet
    sta last_click_idx
 
@@ -343,15 +389,12 @@ start:
 main_loop:
    wai
 
-   ; Keyboard: Q, ESC or RUN/STOP quits. GETIN returns 0 if no key.
+   ; Keyboard. GETIN returns 0 if no key was pressed. (Holding a
+   ; key down repeats it, so holding Down keeps moving.)
    jsr GETIN
-   cmp #$1B                       ; ESC
-   beq quit
-   cmp #$03                       ; RUN/STOP
-   beq quit
-   and #$7F                       ; q and Q differ only in bit 7
-   cmp #$51
-   beq quit
+   beq :+
+   jsr handle_key
+:
 
    ; Mouse: MOUSE_GET writes the position to the 4 zero page bytes
    ; whose address is in X, returns the buttons in A (bit 0 = left)
@@ -430,7 +473,7 @@ handle_click:
    bcs @done
    sec
    sbc #LIST_TOP
-   sta tmp                        ; row within the list, 0..40
+   sta tmp                        ; row within the list, 0..41
 
    ; which column?
    lda click_col
@@ -559,6 +602,310 @@ calc_scroll:
 :  rts
 
 ;==================================================================
+; Keyboard
+;
+; The keyboard works on one list at a time, the one with the
+; "focus" (focus = FOCUS_TREE or FOCUS_FILES). Its highlight bar is
+; blue; the other list's is dark grey.
+;
+;   Tab, Shift+Tab   switch lists
+;   Up, Down         move the highlight one line
+;   Page Up/Down     move it a page
+;   Home, End        move it to the first / last item
+;   Right            open the open folder's first sub-folder
+;   Left             open the open folder's parent
+;                    (Left and Right work in either list)
+;   RETURN           folders: go to the file list
+;                    files:   run the highlighted program
+;   Q, ESC, RUN/STOP quit
+;
+; In the folder list the highlight is the open folder, so moving it
+; opens a folder, just like clicking one.
+;==================================================================
+
+;------------------------------------------------------------------
+; handle_key - act on the key in A
+;------------------------------------------------------------------
+handle_key:
+   cmp #KEY_ESC
+   beq @quit
+   cmp #KEY_RUNSTOP
+   beq @quit
+   tax
+   and #$7F                       ; q and Q differ only in bit 7
+   cmp #$51                       ; 'Q'
+   beq @quit
+   txa
+
+   ; look the key up in key_codes; the matching entry in key_jumps
+   ; is the routine that handles it
+   ldx #0
+@find:
+   cmp key_codes,x
+   beq @found
+   inx
+   cpx #key_codes_end-key_codes
+   bne @find
+   rts                            ; not one of ours: ignore it
+@found:
+   txa
+   asl                            ; 2 bytes per address
+   tax
+   jmp (key_jumps,x)              ; 65C02: jump to the address in
+                                  ;   the table at key_jumps + X
+@quit:
+   jmp quit
+
+key_codes:
+   .byte KEY_TAB, KEY_SHIFT_TAB, KEY_UP, KEY_DOWN, KEY_PGUP
+   .byte KEY_PGDN, KEY_HOME, KEY_END, KEY_LEFT, KEY_RIGHT
+   .byte KEY_RETURN
+key_codes_end:
+key_jumps:
+   .word key_tab, key_tab, key_up, key_down, key_pgup
+   .word key_pgdn, key_home, key_end, key_left, key_right
+   .word key_return
+
+;------------------------------------------------------------------
+; key_tab - give the focus to the other list
+;------------------------------------------------------------------
+key_tab:
+   lda focus
+   eor #1                         ; 0 <-> 1
+   jmp set_focus
+
+;------------------------------------------------------------------
+; key_up / key_down / key_pgup / key_pgdn - move by a line or page
+;------------------------------------------------------------------
+key_up:
+   lda #$FF                       ; -1
+   bra move_by
+key_down:
+   lda #1
+   bra move_by
+key_pgup:
+   lda #256-PAGE_STEP             ; minus a page
+   bra move_by
+key_pgdn:
+   lda #PAGE_STEP
+   ; fall through
+
+;------------------------------------------------------------------
+; move_by - move the focused list's highlight by A lines (negative
+; = up), stopping at the first and last items. If no file is
+; highlighted yet, the top file on screen is highlighted instead.
+;------------------------------------------------------------------
+move_by:
+   sta key_delta
+   jsr focus_info                 ; A = highlighted item, X = count
+   cpx #0
+   beq @done                      ; empty list
+   cmp #$FF
+   bne :+
+   lda file_scroll                ; nothing highlighted: start with
+   bra move_to                    ;   the top file on screen
+:  stx tmp                        ; tmp = count
+   ldx key_delta                  ; negative?
+   bmi @up
+   clc                            ; down: add
+   adc key_delta
+   bcc move_to                    ; (move_to stops at the last item)
+   lda #$FF                       ; past 255
+   bra move_to
+@up:
+   clc                            ; up: adding a negative number
+   adc key_delta                  ;   carries if still >= 0
+   bcs move_to
+   lda #0                         ; went above the first item
+   bra move_to
+@done:
+   rts
+
+;------------------------------------------------------------------
+; key_home / key_end - first / last item
+;------------------------------------------------------------------
+key_home:
+   lda #0
+   bra move_to
+key_end:
+   lda #$FF                       ; move_to stops at the last item
+   ; fall through
+
+;------------------------------------------------------------------
+; move_to - highlight item A of the focused list (or the last item,
+; if A is past the end), scrolling to keep it on screen.
+;------------------------------------------------------------------
+move_to:
+   pha
+   jsr focus_info                 ; X = number of items
+   pla
+   cpx #0
+   beq @done                      ; empty list
+   stx tmp
+   cmp tmp
+   bcc :+                         ; A < count: fine
+   txa                            ; past the end: the last item
+   dec a
+:  ldx focus
+   bne @file
+   cmp tree_sel                   ; the tree: open that folder
+   beq @done
+   jmp select_node                ; (it also scrolls the tree)
+@file:
+   sta file_sel
+   lda #$FF
+   sta last_click_idx             ; (forget any half double-click)
+   jsr ensure_file_visible
+   jmp draw_files
+@done:
+   rts
+
+;------------------------------------------------------------------
+; key_right  - go down a level: open the first sub-folder of the
+;              open folder (expanding it first if it is collapsed)
+; key_left   - go up a level: open the open folder's parent
+; key_return - folders: go to the file list; files: run the
+;              highlighted program
+;
+; In the tree a folder's sub-folders come straight after it, one
+; level deeper, so its first sub-folder is node tree_sel + 1 (if
+; that node is deeper than tree_sel). Its parent is the nearest node
+; above it that is one level shallower.
+;------------------------------------------------------------------
+key_right:
+   lda tree_sel
+   jsr tree_ptr
+   ldy #REC_FLAGS
+   lda (ptr),y
+   stz RAM_BANK
+   bit #FLAG_NOKIDS
+   bne @done                      ; it has no sub-folders
+   bit #FLAG_EXPANDED
+   bne @open                      ; sub-folders already in the tree
+   lda tree_sel                   ; collapsed: put them back (they
+   jsr insert_children            ;   were read when it was opened)
+@open:
+   ldx tree_sel                   ; the node after it...
+   inx
+   cpx tree_count
+   bcs @done                      ; (end of the tree)
+   lda tree_sel
+   jsr node_depth
+   sta tmp                        ; tmp = open folder's depth
+   lda tree_sel
+   inc a
+   jsr node_depth
+   cmp tmp
+   beq @done                      ; ...must be one level deeper,
+   bcc @done                      ;   or it isn't a sub-folder
+   lda tree_sel
+   inc a
+   jmp select_node
+@done:
+   rts
+
+key_left:
+   lda tree_sel
+   jsr node_depth
+   beq @done                      ; the root has no parent
+   dec a
+   sta tmp                        ; tmp = the parent's depth
+   ldx tree_sel
+@scan:
+   dex
+   phx
+   txa
+   jsr node_depth
+   plx
+   cmp tmp
+   bne @scan
+   txa
+   jmp select_node
+@done:
+   rts
+
+key_go_files:
+   lda #FOCUS_FILES
+   jmp set_focus
+
+key_return:
+   lda focus
+   beq key_go_files               ; folders: go to the file list
+   ldx file_sel
+   cpx #$FF
+   beq @done                      ; no file highlighted
+   lda file_order,x               ; is it a program?
+   jsr file_ptr
+   ldy #REC_FLAGS
+   lda (ptr),y
+   stz RAM_BANK
+   and #FLAG_PRG
+   beq @done                      ; no: nothing to run
+   lda file_sel
+   jmp launch_file                ; doesn't come back if it works
+@done:
+   rts
+
+;------------------------------------------------------------------
+; focus_info - about the focused list
+; Out: A = highlighted item ($FF = none), X = number of items
+;------------------------------------------------------------------
+focus_info:
+   lda focus
+   bne :+
+   lda tree_sel
+   ldx tree_count
+   rts
+:  lda file_sel
+   ldx file_count
+   rts
+
+;------------------------------------------------------------------
+; set_focus - give the keyboard focus to list A (FOCUS_TREE or
+; FOCUS_FILES), and redraw both lists so the highlight bars show
+; which one has it. Going to the file list highlights the top file
+; on screen if none is highlighted yet.
+;------------------------------------------------------------------
+set_focus:
+   cmp focus
+   beq @done                      ; no change
+   sta focus
+   cmp #FOCUS_FILES
+   bne @draw
+   lda file_sel
+   cmp #$FF
+   bne @draw                      ; a file is already highlighted
+   lda file_count
+   beq @draw                      ; no files
+   lda file_scroll
+   sta file_sel
+@draw:
+   jsr draw_tree
+   jmp draw_files
+@done:
+   rts
+
+;------------------------------------------------------------------
+; ensure_file_visible - scroll the file list, if needed, so the
+; highlighted file (file_sel) is on screen. (Doesn't redraw.)
+;------------------------------------------------------------------
+ensure_file_visible:
+   lda file_sel
+   cmp file_scroll
+   bcs :+
+   sta file_scroll                ; above the top: make it the top row
+   rts
+:  sec
+   sbc file_scroll                ; rows below the top
+   cmp #LIST_ROWS
+   bcc :+                         ; on screen: nothing to do
+   lda file_sel                   ; below the bottom: make it the
+   sec                            ;   bottom row
+   sbc #LIST_ROWS-1
+   sta file_scroll
+:  rts
+
+;==================================================================
 ; Scroll bars
 ;
 ; A scroll bar is one column: an up arrow on the first list row, a
@@ -610,11 +957,13 @@ handle_hold:
 ;------------------------------------------------------------------
 sb_action:
    lda click_row
-   cmp #LIST_TOP
+   cmp #SB_UP_ROW
    beq @line_up                   ; up arrow
-   bcc @done                      ; (pointer moved above the bar)
-   cmp #LIST_TOP+LIST_ROWS-1
+   cmp #SB_DOWN_ROW
    beq @line_down                 ; down arrow
+   cmp #TRACK_TOP
+   bcc @done                      ; (pointer moved above the bar)
+   cmp #TRACK_TOP+TRACK_ROWS
    bcs @done                      ; (pointer moved below the bar)
 
    ; on the track: compare with the thumb's row
@@ -805,6 +1154,10 @@ div16_8:
 ; only the low byte is needed because we subtract the two times.
 ;------------------------------------------------------------------
 file_click:
+   pha                            ; clicking a list gives it the
+   lda #FOCUS_FILES               ;   keyboard focus
+   jsr set_focus
+   pla
    sta tmp+3                      ; tmp+3 = file position
    jsr RDTIM                      ; A = jiffy clock low byte
    sta tmp+2                      ; tmp+2 = time now
@@ -853,6 +1206,10 @@ file_click:
 ;                             expands it the first time).
 ;------------------------------------------------------------------
 tree_click:
+   pha                            ; clicking a list gives it the
+   lda #FOCUS_TREE                ;   keyboard focus
+   jsr set_focus
+   pla
    sta tmp+3                      ; tmp+3 = node
    jsr tree_ptr                   ; ptr -> node's record
    ldy #REC_DEPTH
@@ -921,11 +1278,20 @@ select_node:
    lda tree_sel
    jsr insert_children
 :
-   ; new folder: no file highlighted, file list back at the top
+   ; new folder: file list back at the top, and no file highlighted
+   ; unless the keyboard is in the file list, when the first file
+   ; is highlighted so Up and Down carry on working
    lda #$FF
    sta file_sel
    sta last_click_idx
    stz file_scroll
+   lda focus
+   cmp #FOCUS_FILES
+   bne :+
+   lda file_count
+   beq :+
+   stz file_sel
+:
    jsr ensure_tree_visible
    jsr draw_tree
    jsr draw_files

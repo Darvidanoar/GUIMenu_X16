@@ -27,8 +27,10 @@
 ;------------------------------------------------------------------
 ; Record pointers
 ;   tree_ptr - tree node        (banks 1-2)
-;   file_ptr - file             (bank 3)
-;   tdir_ptr - sub-folder read  (bank 4)
+;   file_ptr - file             (banks 3-4)
+;   tdir_ptr - sub-folder read  (bank 5)
+;   sort_ptr - a record in the list being sorted (bank sort_bank,
+;              or the one after it for records 128+)
 ; In:  A = record number
 ; Out: RAM_BANK switched to the record's bank, ptr -> the record.
 ;      X is changed.
@@ -45,7 +47,18 @@ tree_ptr:
 
 file_ptr:
    pha
+   asl                            ; bit 7 of the file number -> carry
    lda #FILE_BANK
+   adc #0                         ; files 128+ are in the next bank
+   sta RAM_BANK
+   pla
+   bra rec_addr
+
+sort_ptr:
+   pha
+   asl                            ; bit 7 of the record number
+   lda sort_bank
+   adc #0                         ; records 128+ are in the next bank
    sta RAM_BANK
    pla
    bra rec_addr
@@ -476,7 +489,7 @@ cmd_root_end:
 ; sort_records - sort a list of records alphabetically (ignoring
 ; upper/lower case), with programs (FLAG_PRG) before other files.
 ;
-; In: sort_bank = the bank the records are in
+; In: sort_bank = the (first) bank the records are in
 ;     optr      = the "order" array to fill in (file_order or
 ;                 tdir_order)
 ;     X         = number of records
@@ -487,7 +500,11 @@ cmd_root_end:
 ;
 ; This is an "insertion sort": take each entry in turn (the "key")
 ; and slide it backwards past every earlier entry whose name comes
-; after it. Simple, and quick enough for 128 names.
+; after it. Simple, and quick enough for 255 names.
+;
+; The records can be in two banks, and only one bank can be seen at
+; a time, so the key's record is copied into recbuf (normal RAM)
+; and each earlier record is compared with that copy.
 ;------------------------------------------------------------------
 sort_records:
    stx sort_n
@@ -510,21 +527,15 @@ sort_records:
    lda (optr),y
    sta sort_key                   ; key = order[i]
    sty sort_j                     ; j = i
+   jsr sort_ptr                   ; copy the key's record into recbuf
+   jsr load_rec                   ;   (load_rec sets RAM_BANK to 0)
 @inner:
    ldy sort_j
    beq @place                     ; reached the front of the list
    dey
    lda (optr),y                   ; order[j-1]
-   jsr rec_addr
-   lda ptr
-   sta ptr2
-   lda ptr+1
-   sta ptr2+1                     ; ptr2 -> record order[j-1]
-   lda sort_key
-   jsr rec_addr                   ; ptr  -> record key
-   lda sort_bank
-   sta RAM_BANK
-   jsr compare_names              ; C=1 if ptr2 sorts after ptr
+   jsr sort_ptr                   ; ptr -> its record, bank switched
+   jsr compare_names              ; C=1 if it sorts after the key
    stz RAM_BANK
    bcc @place                     ; order[j-1] comes first: stop here
    ldy sort_j                     ; otherwise move order[j-1] up one
@@ -544,9 +555,10 @@ sort_records:
    rts
 
 ;------------------------------------------------------------------
-; compare_names - decide which of records ptr2 and ptr comes first
-; Out: C = 1 if ptr2 comes after ptr, otherwise C = 0
-; (RAM_BANK must already be set to the records' bank.)
+; compare_names - decide which comes first: the record at ptr, or
+; the key record copied into recbuf
+; Out: C = 1 if the record at ptr comes after the key, else C = 0
+; (RAM_BANK must already be set to ptr's bank.)
 ;
 ; Programs come before everything else, so they are at the top of
 ; the file list: if only one of the two is a program, that decides
@@ -556,24 +568,24 @@ sort_records:
 ;------------------------------------------------------------------
 compare_names:
    ldy #REC_FLAGS
-   lda (ptr2),y
-   eor (ptr),y                    ; bits that differ between the two
+   lda (ptr),y
+   eor recbuf+REC_FLAGS           ; bits that differ between the two
    and #FLAG_PRG
    beq @by_name                   ; both programs, or neither
-   lda (ptr),y                    ; just one is a program. If it is
-   and #FLAG_PRG                  ;   ptr, then ptr2 comes after it
-   cmp #FLAG_PRG                  ;   (C = 1), otherwise ptr2 is the
+   lda recbuf+REC_FLAGS           ; just one is a program. If it is
+   and #FLAG_PRG                  ;   the key, ptr comes after it
+   cmp #FLAG_PRG                  ;   (C = 1), otherwise ptr is the
    rts                            ;   program and comes first (C = 0)
 
 @by_name:
    ldy #REC_NAME
 @loop:
-   lda (ptr),y
+   lda recbuf,y
    jsr fold_case
-   sta tmp                        ; character from ptr
-   lda (ptr2),y
-   jsr fold_case                  ; character from ptr2
-   cmp tmp                        ; C = 1 if ptr2's >= ptr's
+   sta tmp                        ; character from the key
+   lda (ptr),y
+   jsr fold_case                  ; character from ptr
+   cmp tmp                        ; C = 1 if ptr's >= the key's
    bne @diff                      ; different: C is the answer
    cmp #0
    beq @equal                     ; both names ended: equal

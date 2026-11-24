@@ -238,18 +238,30 @@ parse_line:
    beq @dir
 
    ; ---- a file ----
-   lda file_count
-   cmp #MAX_FILES
-   bcs @ignore                    ; list full
+   ; If the list is full, an ordinary file is dropped, but a program
+   ; takes the place of an ordinary file already in the list, so
+   ; programs are never lost (they are what we are here to run).
    jsr name_to_recbuf
    jsr is_prg
-   bcc :+
+   bcc @not_prg
    lda #FLAG_PRG                  ; mark programs
    sta recbuf+REC_FLAGS
-:  lda file_count                 ; store as the next file record
-   jsr file_ptr
+   lda file_count
+   cmp #MAX_FILES
+   bcc @add_file                  ; room left: add it
+   jsr find_non_prg               ; full: A = an ordinary file to
+   bcs @ignore                    ;   replace (none: all programs)
+   bra @store_file
+@not_prg:
+   lda file_count
+   cmp #MAX_FILES
+   bcs @ignore                    ; list full: drop it
+@add_file:
+   lda file_count                 ; store as the next file record
+   inc file_count                 ;   (INC doesn't change A)
+@store_file:
+   jsr file_ptr                   ; A = record number to store at
    jsr store_rec
-   inc file_count
 @ignore:
    rts
 
@@ -274,6 +286,32 @@ parse_line:
    jsr tdir_ptr
    jsr store_rec
    inc tdir_count
+   rts
+
+;------------------------------------------------------------------
+; find_non_prg - find a file record that is not a program
+; Out: C = 0 and A = its record number, or C = 1 if every file in
+;      the list is a program
+;------------------------------------------------------------------
+find_non_prg:
+   stz scan_i
+@loop:
+   lda scan_i
+   jsr file_ptr                   ; ptr -> record, bank switched
+   ldy #REC_FLAGS
+   lda (ptr),y
+   stz RAM_BANK
+   and #FLAG_PRG
+   beq @found                     ; not a program
+   inc scan_i
+   lda scan_i
+   cmp file_count
+   bne @loop
+   sec                            ; all programs
+   rts
+@found:
+   lda scan_i
+   clc
    rts
 
 ;------------------------------------------------------------------
@@ -327,5 +365,6 @@ is_prg:
 .pushseg
 .segment "BSS"
 first_line: .res 1                ; 1 while reading the disk name line
+scan_i:     .res 1                ; record being checked by find_non_prg
 line_len:   .res 1                ; characters in linebuf
 .popseg
