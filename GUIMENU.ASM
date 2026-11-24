@@ -4,9 +4,9 @@
 ; A mouse driven program launcher for the Commander X16, styled
 ; after a Windows 3.1 window on a dark blue desktop.
 ;
-;   [logo]  COMMANDER X16                      <- desktop icon, with
-;                                                   the name in big
-;                                                   letters beside it
+;   [ COMMANDER X16 logo ]                     <- desktop logo, an
+;                                                   image shown with
+;                                                   sprites
 ;  +==========================================================+
 ;  |[-]            SD Card Program Launcher             [v][^]|
 ;  |----------------------------------------------------------|
@@ -96,13 +96,18 @@ FLAG_PRG          = $01           ; file name ends in .PRG
 SCREEN_COLS       = 80
 SCREEN_ROWS       = 60
 
-; desktop icon
-LOGO_X            = 4             ; top left corner of the 7x7 logo
-LOGO_Y            = 0
-BANNER_X          = 13            ; "Commander X16" in big letters
-BANNER_Y          = 2             ;   beside the logo: 4 rows, 4
-                                  ;   columns per letter
-BANNER_MAX        = 16            ; most letters the banner can hold
+; The desktop logo is a 320x55 pixel picture (made from
+; CommanderX16_320.png by tools/logo2bin.py) shown with 5 sprites of
+; 64x64 pixels side by side. Sprites are positioned in pixels; in
+; this 80 column mode one sprite pixel is one screen pixel, so the
+; logo is 40 columns wide and fits in the 9 rows above the window.
+LOGO_X            = 16            ; top left corner, in pixels
+LOGO_Y            = 8
+LOGO_SPRITES      = 5             ; sprites 1-5 (sprite 0 is the mouse)
+LOGO_SPR_BYTES    = 64*64         ; 64x64 pixels, 1 byte per pixel
+LOGO_VRAM         = $04000        ; where the sprite pixels go in VRAM
+                                  ;   (unused in text mode)
+LOGO_PAL_FIRST    = 128           ; logo colours: palette entries 128-255
 
 ; the window
 WIN_L             = 1             ; left border column
@@ -155,8 +160,9 @@ REPEAT_RATE       = 3             ; frames between repeats
 ; nibble is the background colour, the low nibble the foreground
 ; (text) colour. Colours are entries 0-15 of the palette. At start-
 ; up set_palette changes entries 9, A, B, C and F to the Windows 3.1
-; colours below (and restore_system puts them back). The others
-; keep the X16 defaults, which the logo uses.
+; colours below, and entries 128-255 to the logo's colours (and
+; restore_system puts them all back). The others keep the X16
+; defaults.
 ;
 ;   0 (see below) 1 white  2 red      3 cyan     4 purple   5 green
 ;   6 blue    7 yellow   8 orange   9 navy*    A dk blue* B grey*
@@ -179,58 +185,52 @@ COL_EMPTY         = $1B           ; "(no files)": grey on white
 COL_ERROR         = $12           ; error in a list: red on white
 COL_STATUS        = $FC           ; status line: black on light grey
 COL_STATUS_ERR    = $F2           ; error on status line: red
-COL_BANNER        = $A1           ; big "Commander X16": white on
-                                  ;   dark blue
 
 ;------------------------------------------------------------------
 ; Custom characters
 ;
 ; We use the "upper/lower case" character set so file names can be
 ; shown in mixed case. At start-up our own 8x8 shapes (see "glyphs"
-; in SCREEN.ASM) are drawn over screen codes $80-$AF, which are
+; in SCREEN.ASM) are drawn over screen codes $80-$9C, which are
 ; normally reverse-video letters that this program never uses.
 ;------------------------------------------------------------------
 GLYPH_BASE        = $80           ; first replaced screen code
-                                  ; $80-$92 are the logo pieces
 ; window border (grey with a black line on each side)
-CH_W_TL           = $93           ; corners
-CH_W_TR           = $94
-CH_W_BL           = $95
-CH_W_BR           = $96
-CH_W_H            = $97           ; top/bottom border
-CH_W_V            = $98           ; left/right border
-CH_W_NL           = $99           ; notches near the corners
-CH_W_NR           = $9A
-CH_W_NT           = $9B
-CH_W_NB           = $9C
+CH_W_TL           = $80           ; corners
+CH_W_TR           = $81
+CH_W_BL           = $82
+CH_W_BR           = $83
+CH_W_H            = $84           ; top/bottom border
+CH_W_V            = $85           ; left/right border
+CH_W_NL           = $86           ; notches near the corners
+CH_W_NR           = $87
+CH_W_NT           = $88
+CH_W_NB           = $89
 ; title bar
-CH_SYSBOX         = $9D           ; control-menu box
-CH_MIN            = $9E           ; minimise button
-CH_MAX            = $9F           ; maximise button
-CH_TOPLINE        = $A0           ; black line under the title bar
+CH_SYSBOX         = $8A           ; control-menu box
+CH_MIN            = $8B           ; minimise button
+CH_MAX            = $8C           ; maximise button
+CH_TOPLINE        = $8D           ; black line under the title bar
 ; list box border (a thin black line)
-CH_LB_TL          = $A1
-CH_LB_T           = $A2
-CH_LB_TR          = $A3
-CH_LB_L           = $A4
-CH_LB_R           = $A5
-CH_LB_BL          = $A6
-CH_LB_B           = $A7
-CH_LB_BR          = $A8
+CH_LB_TL          = $8E
+CH_LB_T           = $8F
+CH_LB_TR          = $90
+CH_LB_L           = $91
+CH_LB_R           = $92
+CH_LB_BL          = $93
+CH_LB_B           = $94
+CH_LB_BR          = $95
 ; scroll bar
-CH_SB_UP          = $A9           ; up arrow button
-CH_SB_DOWN        = $AA           ; down arrow button
-CH_SB_TRACK       = $AB           ; empty track
-CH_SB_THUMB       = $AC           ; the thumb
+CH_SB_UP          = $96           ; up arrow button
+CH_SB_DOWN        = $97           ; down arrow button
+CH_SB_TRACK       = $98           ; empty track
+CH_SB_THUMB       = $99           ; the thumb
 ; tree
-CH_FOLDER         = $AD           ; folder icon
-CH_PLUS           = $AE           ; [+] box
-CH_MINUS          = $AF           ; [-] box
+CH_FOLDER         = $9A           ; folder icon
+CH_PLUS           = $9B           ; [+] box
+CH_MINUS          = $9C           ; [-] box
 
-CH_QUAD           = $B0           ; $B0-$BF: the 16 "quadrant" blocks
-                                  ;   used for the big letters (see
-                                  ;   draw_banner)
-GLYPH_COUNT       = $C0 - GLYPH_BASE ; number of custom characters
+GLYPH_COUNT       = $9D - GLYPH_BASE ; number of custom characters
 
 ;------------------------------------------------------------------
 ; Zero page variables. Only zero page locations can be used as
@@ -287,7 +287,7 @@ div_d:            .res 1
 dir_error:        .res 1          ; not 0 if the folder couldn't be read
 
 file_order:       .res MAX_FILES  ; record numbers of the files, in
-                                  ;   alphabetical order
+                                  ;   sorted order (programs first)
 tdir_order:       .res MAX_TDIRS  ; same for the sub-folders
 recbuf:           .res 64         ; a copy of one record in normal RAM
 linebuf:          .res 256        ; one line of a directory listing
@@ -299,9 +299,8 @@ dos_status:       .res 2          ; first two digits of the DOS reply
 pathbuf:          .res 256        ; "/GAMES/ARCADE" for the status line
 chain:            .res MAX_DEPTH+1 ; nodes from the root down to the
                                   ;   folder being opened
-pal_save:         .res 32         ; the original palette entries 0-15
-banner_buf:       .res BANNER_MAX*8 ; font shapes of the banner's
-                                  ;   letters, 8 bytes each
+pal_save:         .res 512        ; the original palette (256 colours,
+                                  ;   2 bytes each)
 
 ;------------------------------------------------------------------
 .segment "CODE"
@@ -311,7 +310,7 @@ banner_buf:       .res BANNER_MAX*8 ; font shapes of the banner's
 ;==================================================================
 start:
    jsr init_screen                ; text mode, palette, glyphs, desktop
-   jsr draw_desktop_icon          ; logo and caption
+   jsr show_logo                  ; the Commander X16 logo sprites
    jsr draw_window                ; the window and its empty boxes
 
    ; Turn the mouse pointer on. SCREEN_MODE with carry set returns
@@ -954,15 +953,16 @@ ensure_tree_visible:
 
 ;------------------------------------------------------------------
 ; restore_system - put things back the way BASIC expects them:
-; mouse pointer off, the original palette, RAM bank 0, default I/O
-; channels, and SCINIT (the KERNAL's CINT) resets the screen mode,
-; colours and character set, and clears the screen.
+; mouse pointer and logo sprites off, the original palette, RAM bank
+; 0, default I/O channels, and SCINIT (the KERNAL's CINT) resets the
+; screen mode, colours and character set, and clears the screen.
 ;------------------------------------------------------------------
 restore_system:
    lda #0
    ldx #0
    ldy #0
    jsr MOUSE_CONFIG               ; A = 0: hide the mouse pointer
+   jsr hide_logo
    jsr restore_palette
    stz RAM_BANK
    jsr CLRCHN

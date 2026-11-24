@@ -474,7 +474,7 @@ cmd_root_end:
 
 ;------------------------------------------------------------------
 ; sort_records - sort a list of records alphabetically (ignoring
-; upper/lower case).
+; upper/lower case), with programs (FLAG_PRG) before other files.
 ;
 ; In: sort_bank = the bank the records are in
 ;     optr      = the "order" array to fill in (file_order or
@@ -524,7 +524,7 @@ sort_records:
    jsr rec_addr                   ; ptr  -> record key
    lda sort_bank
    sta RAM_BANK
-   jsr compare_names              ; C=1 if name(ptr2) > name(ptr)
+   jsr compare_names              ; C=1 if ptr2 sorts after ptr
    stz RAM_BANK
    bcc @place                     ; order[j-1] comes first: stop here
    ldy sort_j                     ; otherwise move order[j-1] up one
@@ -544,11 +544,28 @@ sort_records:
    rts
 
 ;------------------------------------------------------------------
-; compare_names - compare the names in records ptr2 and ptr
-; Out: C = 1 if name(ptr2) comes after name(ptr), otherwise C = 0
+; compare_names - decide which of records ptr2 and ptr comes first
+; Out: C = 1 if ptr2 comes after ptr, otherwise C = 0
 ; (RAM_BANK must already be set to the records' bank.)
+;
+; Programs come before everything else, so they are at the top of
+; the file list: if only one of the two is a program, that decides
+; it. Otherwise (both programs, or neither) the names are compared.
+; Folder records never have FLAG_PRG set, so folders just sort by
+; name.
 ;------------------------------------------------------------------
 compare_names:
+   ldy #REC_FLAGS
+   lda (ptr2),y
+   eor (ptr),y                    ; bits that differ between the two
+   and #FLAG_PRG
+   beq @by_name                   ; both programs, or neither
+   lda (ptr),y                    ; just one is a program. If it is
+   and #FLAG_PRG                  ;   ptr, then ptr2 comes after it
+   cmp #FLAG_PRG                  ;   (C = 1), otherwise ptr2 is the
+   rts                            ;   program and comes first (C = 0)
+
+@by_name:
    ldy #REC_NAME
 @loop:
    lda (ptr),y

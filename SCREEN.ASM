@@ -20,8 +20,15 @@
 ; byte is col*2. That makes set_cursor very short.
 ;
 ; The shapes of the characters (8 bytes each, one per pixel row,
-; leftmost pixel in bit 7) are stored at VRAM $1F000, and the 16
-; colours of the palette (2 bytes each) at VRAM $1FA00.
+; leftmost pixel in bit 7) are stored at VRAM $1F000, and the 256
+; colours of the palette (2 bytes each) at VRAM $1FA00. Text uses
+; only the first 16 colours.
+;
+; THE LOGO
+; The Commander X16 logo at the top is a picture, too detailed for
+; character cells, so it is drawn with sprites instead: small
+; images that VERA draws on top of the text wherever we place them
+; (see show_logo).
 ;
 ; HOW THE WINDOW IS DRAWN
 ; Every cell can only have two colours (its foreground and its
@@ -69,18 +76,15 @@ init_screen:
    ; Copy our custom character shapes into the character set,
    ; starting at character GLYPH_BASE ($1F000 + $80*8 = $1F400).
    ; VERA_SET_ADDR (from x16.inc) sets the address with increment 1.
-   ; There are exactly 512 bytes (64 characters), so it is done in
-   ; two loops of 256, each ending when X wraps round to 0.
-   .assert GLYPH_COUNT*8 = 512, error, "glyph copy expects 512 bytes"
+   ; There are fewer than 256 bytes, so X can count through them.
+   .assert GLYPH_COUNT*8 <= 256, error, "glyph copy expects <= 256 bytes"
+   .assert glyphs_end - glyphs = GLYPH_COUNT*8, error, "wrong number of glyphs"
    VERA_SET_ADDR (VRAM_petscii + GLYPH_BASE*8), 1
    ldx #0
-:  lda glyphs,x                   ; first 256 bytes
+:  lda glyphs,x
    sta VERA_data0
    inx
-   bne :-
-:  lda glyphs+256,x               ; second 256 bytes
-   sta VERA_data0
-   inx
+   cpx #GLYPH_COUNT*8
    bne :-
 
    ; Fill the whole screen with the desktop colour.
@@ -99,16 +103,30 @@ init_screen:
    rts
 
 ;------------------------------------------------------------------
-; set_palette - save the original 16 colours, then change some of
-; them to our Windows 3.1 colours (see pal_new).
+; set_palette - save the original palette, change some of the text
+; colours to our Windows 3.1 colours (see pal_new), and put the
+; logo's colours in entries 128-255.
 ;------------------------------------------------------------------
 set_palette:
-   VERA_SET_ADDR VRAM_palette, 1  ; save all 32 bytes
-   ldx #0
-:  lda VERA_data0
+   VERA_SET_ADDR VRAM_palette, 1  ; save all 512 bytes, in two
+   ldx #0                         ;   loops of 256 (each ends when X
+:  lda VERA_data0                 ;   wraps round to 0)
    sta pal_save,x
    inx
-   cpx #32
+   bne :-
+:  lda VERA_data0
+   sta pal_save+256,x
+   inx
+   bne :-
+
+   ; the logo's colours, made by tools/logo2bin.py: 128 colours of
+   ; 2 bytes each = 256 bytes, for entries 128-255
+   .assert LOGO_PAL_FIRST = 128, error, "logo palette copy expects 128"
+   VERA_SET_ADDR (VRAM_palette + LOGO_PAL_FIRST*2), 1
+   ldx #0
+:  lda logo_pal,x
+   sta VERA_data0
+   inx
    bne :-
 
    ldx #0
@@ -142,7 +160,10 @@ restore_palette:
 :  lda pal_save,x
    sta VERA_data0
    inx
-   cpx #32
+   bne :-
+:  lda pal_save+256,x
+   sta VERA_data0
+   inx
    bne :-
    rts
 
@@ -150,7 +171,7 @@ restore_palette:
 ; Each of R, G, B goes from 0 (none) to F (full).
 pal_new:
    .byte $09, $08, $00            ; 9 navy       #008
-   .byte $0A, $04, $00            ; A dark blue  #004
+   .byte $0A, $06, $00            ; A dark blue  #006
    .byte $0B, $66, $06            ; B grey       #666
    .byte $0C, $00, $00            ; C black      #000
    .byte $0F, $CC, $0C            ; F light grey #CCC
@@ -402,188 +423,100 @@ pet_to_screen:
    rts
 
 ;------------------------------------------------------------------
-; draw_desktop_icon - the X16 logo with "Commander X16" in big
-; letters beside it.
+; show_logo - show the Commander X16 logo picture at the top left.
 ;
-; The logo is the same one the X16 shows when it starts: 7 rows of
-; 7 characters (see "logo" below), each row in its own colour.
+; A sprite is a small picture (here 64x64 pixels) that VERA draws
+; over the text layer at any pixel position. The logo is 320 pixels
+; wide, so it is cut into 5 sprites placed side by side:
+;
+;     +--------+--------+--------+--------+--------+
+;     | sprite | sprite | sprite | sprite | sprite |   each 64x64,
+;     |   1    |   2    |   3    |   4    |   5    |   only the top
+;     +--------+--------+--------+--------+--------+   55 rows used
+;
+; Sprite 0 is the mouse pointer, so the logo uses sprites 1-5.
+; Each pixel is one byte: a palette entry (128-255, set up by
+; set_palette), or 0 for "see-through", which lets the dark blue
+; desktop show through around the letters.
+;
+; Step 1 unpacks the pixels into VRAM at LOGO_VRAM. They are stored
+; in the program "run-length encoded", because most of the picture
+; is see-through: a run of see-through pixels is stored as just
+; two bytes, $00 then how many. $00 $00 marks the end. Any other
+; byte is one pixel.
+;
+; Step 2 writes the 5 sprites' attributes (see logo_attr), which
+; tell VERA where each sprite's pixels are and where to show it.
 ;------------------------------------------------------------------
-draw_desktop_icon:
-   ldy #0                         ; Y = logo row 0..6
-@row:
-   lda logo_colors,y              ; this row's colour
-   sta cur_color
-   ldx #LOGO_X
-   phy
-   tya
-   clc
-   adc #LOGO_Y                    ; screen row = LOGO_Y + logo row
-   tay
-   jsr set_cursor
-   ply
-   lda #7                         ; 7 characters per row
-   sta remain
-   ; X = offset of this row in the logo table = row * 7
-   ; (worked out as row * 8 - row)
-   tya
-   sta tmp
-   asl
-   asl
-   asl
-   sec
-   sbc tmp
+show_logo:
+   ; ---- step 1: unpack the pixels ----
+   VERA_SET_ADDR LOGO_VRAM, 1
+   lda #<logo_rle
+   sta sptr
+   lda #>logo_rle
+   sta sptr+1
+@next:
+   jsr @get                       ; A = next byte
+   bne @pixel                     ; not 0: a single pixel
+   jsr @get                       ; 0: A = length of the run
+   beq @unpacked                  ; 0 0: the end
    tax
-@col:
-   lda logo,x
-   phx
-   jsr put_char
-   plx
+   lda #0
+:  sta VERA_data0                 ; X see-through pixels
+   dex
+   bne :-
+   bra @next
+@pixel:
+   sta VERA_data0
+   bra @next
+
+@get:                             ; A = the byte at sptr, and step
+   lda (sptr)                     ;   sptr on to the next one
+   inc sptr
+   bne :+
+   inc sptr+1
+:  cmp #0                         ; the INCs changed the zero flag:
+   rts                            ;   set it again from A
+
+@unpacked:
+   ; ---- step 2: the sprite attributes ----
+   ; Sprite n's 8 attribute bytes are at VRAM_sprattr + n*8, so
+   ; sprites 1-5 are one block of 40 bytes starting at +8.
+   VERA_SET_ADDR (VRAM_sprattr + 8), 1
+   ldx #0
+:  lda logo_attr,x
+   sta VERA_data0
    inx
-   lda remain
-   bne @col                       ; until the 7 are done
-   iny
-   cpy #7
-   bne @row
-
-   jmp draw_banner                ; then the big caption
-
-;------------------------------------------------------------------
-; draw_banner - "Commander X16" (str_caption) in letters 4 times the
-; normal size, at BANNER_X, BANNER_Y.
-;
-; Each letter is taken from the X16's own font, already in VRAM: a
-; character is 8x8 pixels, stored as 8 bytes (one per pixel row,
-; leftmost pixel in bit 7). Blown up 4 times, every font pixel
-; becomes a 4x4 square, so one screen cell (8x8) holds a 2x2 group
-; of font pixels:
-;
-;      font pixels          one screen cell
-;      TL TR          ->    +----+----+
-;      BL BR                | TL | TR |   each quarter is filled
-;                           +----+----+   if its font pixel is set
-;                           | BL | BR |
-;                           +----+----+
-;
-; There are 16 ways to fill the quarters, so there are 16 custom
-; "quadrant" characters, CH_QUAD+0 to CH_QUAD+15. The number added
-; to CH_QUAD is built from the four pixels:
-;     TL*8 + TR*4 + BL*2 + BR*1
-;
-; So one letter (8x8 pixels) covers 4x4 screen cells: font pixel
-; rows 0+1 make cell row 0, rows 2+3 make cell row 1, and so on;
-; pixel columns 0+1 make cell column 0, and so on.
-;
-; Step 1 copies the font shapes of all the letters into banner_buf
-; (8 bytes per letter). Step 2 draws the banner one cell row at a
-; time, going across all the letters.
-;------------------------------------------------------------------
-draw_banner:
-   ; ---- step 1: copy the letters' shapes out of VRAM ----
-   ldy #0                         ; Y = letter number
-@fetch:
-   lda str_caption,y
-   beq @fetched                   ; 0 = end of the string
-   jsr pet_to_screen              ; character number in the font
-
-   ; VRAM address of its shape = VRAM_petscii + character * 8.
-   ; The character is below $80, so character * 8 fits in 10 bits:
-   ; work it out in tmp (low) and tmp+1 (high).
-   sta tmp
-   stz tmp+1
-   asl tmp                        ; * 2
-   rol tmp+1
-   asl tmp                        ; * 4
-   rol tmp+1
-   asl tmp                        ; * 8
-   rol tmp+1
-   lda tmp
-   clc
-   adc #<VRAM_petscii
-   sta VERA_addr_low
-   lda tmp+1
-   adc #>VRAM_petscii
-   sta VERA_addr_high
-   lda #$10 | ^VRAM_petscii       ; increment 1, and bit 16 of the
-   sta VERA_addr_bank             ;   address ($1F000 is in bank 1)
-
-   ; read its 8 bytes into banner_buf + letter * 8
-   tya
-   asl
-   asl
-   asl
-   tax                            ; X = letter * 8
-   lda #8
-   sta tmp+2                      ; bytes left to copy
-:  lda VERA_data0                 ; reading also steps the address on
-   sta banner_buf,x
-   inx
-   dec tmp+2
+   cpx #LOGO_SPRITES*8
    bne :-
 
-   iny
-   cpy #BANNER_MAX
-   bne @fetch                     ; (stop if the string is too long)
-@fetched:
-   sty tmp+3                      ; tmp+3 = number of letters
+   lda VERA_dc_video              ; make sure sprites are switched on
+   ora #$40                       ;   (bit 6). The mouse pointer turns
+   sta VERA_dc_video              ;   them on too.
+   rts
 
-   ; ---- step 2: draw it, one cell row (2 font rows) at a time ----
-   lda #COL_BANNER
-   sta cur_color
-   ldy #0                         ; Y = cell row 0..3
-@row:
-   phy
-   tya
-   clc
-   adc #BANNER_Y                  ; screen row = BANNER_Y + cell row
-   tay
-   ldx #BANNER_X
-   jsr set_cursor
-   ply
-   lda #SCREEN_COLS-BANNER_X      ; never draw past the right edge
-   sta remain
-
-   ; X = where this cell row's top font row is in banner_buf, for
-   ; the first letter: font row = cell row * 2
-   tya
+;------------------------------------------------------------------
+; hide_logo - switch the logo sprites off again, by setting their
+; "Z-depth" (attribute byte 6) to 0, which means "not shown".
+;------------------------------------------------------------------
+hide_logo:
+   ldx #1                         ; sprites 1-5
+@sprite:
+   txa                            ; address = VRAM_sprattr + n*8 + 6
    asl
-   tax
-   lda tmp+3
-   sta tmp+2                      ; letters left on this row
-@letter:
-   lda banner_buf,x               ; top font row of the pair
-   sta tmp
-   lda banner_buf+1,x             ; bottom font row of the pair
-   sta tmp+1
-   phx
-   ldx #4                         ; 4 cells across each letter
-@cell:
-   ; Shift the next 2 pixels out of each font row (leftmost first)
-   ; and roll them into A, so A ends up as TL*8 + TR*4 + BL*2 + BR.
-   lda #0
-   asl tmp                        ; TL -> carry
-   rol                            ;    -> A
-   asl tmp                        ; TR
-   rol
-   asl tmp+1                      ; BL
-   rol
-   asl tmp+1                      ; BR
-   rol
-   ora #CH_QUAD                   ; the quadrant character
-   jsr put_char                   ; (keeps X and Y)
-   dex
-   bne @cell
-   plx
-
-   txa                            ; on to the same font rows of the
-   clc                            ;   next letter, 8 bytes further on
-   adc #8
-   tax
-   dec tmp+2
-   bne @letter
-
-   iny
-   cpy #4
-   bne @row
+   asl
+   asl
+   clc
+   adc #<(VRAM_sprattr + 6)
+   sta VERA_addr_low
+   lda #>VRAM_sprattr
+   sta VERA_addr_high
+   lda #^VRAM_sprattr             ; bank 1, no increment
+   sta VERA_addr_bank
+   stz VERA_data0
+   inx
+   cpx #LOGO_SPRITES+1
+   bne @sprite
    rts
 
 ;------------------------------------------------------------------
@@ -951,7 +884,8 @@ draw_tree:
 ;------------------------------------------------------------------
 ; draw_files - redraw the file list and its scroll bar
 ;
-; Each row shows file (file_scroll + row) of the sorted list.
+; Each row shows file (file_scroll + row) of the sorted list
+; (programs first, then other files, each group in name order).
 ; Programs are blue, other files black, and the highlighted file
 ; gets a navy bar. An empty folder shows "(no files)", and a folder
 ; that couldn't be read shows an error.
@@ -1070,7 +1004,6 @@ sb_col:    .res 1                 ; column for draw_scrollbar
 ;------------------------------------------------------------------
 ; Text. With "-t cx16" the assembler stores strings as PETSCII.
 ;------------------------------------------------------------------
-str_caption:   .byte "Commander X16", 0
 str_wtitle:    .byte "SD Card Program Launcher"
 str_wtitle_end: .byte 0
 str_folders:   .byte "Folders:", 0
@@ -1082,31 +1015,37 @@ str_hint:      .byte "Double-click a program to run it.  Q = Quit"
 str_hint_end:  .byte 0
 
 ;------------------------------------------------------------------
-; The Commander X16 logo: 7 rows of 7 screen codes. $20 is a space;
-; $80-$92 are the custom logo pieces in "glyphs" below. These are
-; the same shapes and colours as the logo on the X16's start-up
-; screen.
+; The logo picture, made from CommanderX16_320.png by
+; tools/logo2bin.py (see that script for the file formats).
 ;------------------------------------------------------------------
-logo:
-   .byte $80,$20,$20,$20,$20,$20,$82
-   .byte $81,$80,$20,$20,$20,$82,$83
-   .byte $84,$85,$80,$20,$82,$85,$86
-   .byte $20,$87,$88,$20,$89,$87,$20
-   .byte $20,$8A,$8B,$20,$8C,$8A,$20
-   .byte $8D,$85,$8E,$20,$8F,$85,$90
-   .byte $91,$8E,$20,$20,$20,$8F,$92
+logo_pal:   .incbin "LOGO.PAL"    ; colours for palette entries 128-255
+logo_rle:   .incbin "LOGO.RLE"    ; the pixels, run-length encoded
 
-; colour of each logo row, on the dark blue desktop:
-; purple, light blue, cyan, green, yellow, orange, red
-logo_colors:
-   .byte $A4,$AE,$A3,$A5,$A7,$A8,$A2
+; Sprite attributes for sprites 1-5, 8 bytes each:
+;   bytes 0-1  where the pixels are in VRAM, divided by 32 (bits
+;              12-5 of the address, then bits 16-13), and bit 7 of
+;              byte 1 set = 8 bits per pixel
+;   bytes 2-3  X position in pixels
+;   bytes 4-5  Y position in pixels
+;   byte 6     Z-depth in bits 3-2: 3 = in front of the text
+;   byte 7     size: height in bits 7-6, width in bits 5-4
+;              (3 = 64 pixels for both = $F0); palette offset 0
+logo_attr:
+.repeat LOGO_SPRITES, I
+   .byte <((LOGO_VRAM + I*LOGO_SPR_BYTES) >> 5)
+   .byte $80 | ((LOGO_VRAM + I*LOGO_SPR_BYTES) >> 13)
+   .word LOGO_X + I*64
+   .word LOGO_Y
+   .byte $0C
+   .byte $F0
+.endrep
 
 ;------------------------------------------------------------------
-; Custom character shapes, copied over screen codes $80-$AF by
+; Custom character shapes, copied over screen codes $80-$9C by
 ; init_screen. Each character is 8 bytes, top row first; in each
 ; byte bit 7 is the leftmost pixel and a 1 bit is drawn in the
 ; foreground colour. For example the window's top-left corner
-; ($93) is:
+; ($80) is:
 ;
 ;     $FF  ########     black outer edge along the top...
 ;     $80  #.......     ...and down the left
@@ -1118,76 +1057,39 @@ logo_colors:
 ;     $81  #......#     the inner edge starts at the far corner
 ;------------------------------------------------------------------
 glyphs:
-   ; ---- $80-$92: logo pieces (triangles, bars and blocks) ----
-   .byte $00,$80,$C0,$E0,$F0,$F8,$FC,$FE   ; $80
-   .byte $7F,$7F,$7F,$7F,$7F,$7F,$7F,$7F   ; $81
-   .byte $00,$01,$03,$07,$0F,$1F,$3F,$7F   ; $82
-   .byte $FE,$FE,$FE,$FE,$FE,$FE,$FE,$FE   ; $83
-   .byte $1F,$1F,$1F,$1F,$1F,$1F,$1F,$1F   ; $84
-   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $85
-   .byte $F8,$F8,$F8,$F8,$F8,$F8,$F8,$F8   ; $86
-   .byte $FF,$FF,$00,$00,$00,$00,$00,$00   ; $87
-   .byte $FF,$FF,$FF,$FF,$0F,$0F,$0F,$0F   ; $88
-   .byte $FF,$FF,$FF,$FF,$F0,$F0,$F0,$F0   ; $89
-   .byte $00,$00,$00,$00,$00,$00,$FF,$FF   ; $8A
-   .byte $0F,$0F,$0F,$0F,$FF,$FF,$FF,$FF   ; $8B
-   .byte $F0,$F0,$F0,$F0,$FF,$FF,$FF,$FF   ; $8C
-   .byte $03,$03,$03,$03,$03,$03,$03,$03   ; $8D
-   .byte $FF,$FE,$FC,$F8,$F0,$E0,$C0,$80   ; $8E
-   .byte $FF,$7F,$3F,$1F,$0F,$07,$03,$01   ; $8F
-   .byte $C0,$C0,$C0,$C0,$C0,$C0,$C0,$C0   ; $90
-   .byte $07,$07,$07,$07,$07,$07,$07,$07   ; $91
-   .byte $E0,$E0,$E0,$E0,$E0,$E0,$E0,$E0   ; $92
-   ; ---- $93-$9C: window sizing border ----
+   ; ---- $80-$89: window sizing border ----
    ; grey, with a black line on the outside and inside edges
-   .byte $FF,$80,$80,$80,$80,$80,$80,$81   ; $93 top left corner
-   .byte $FF,$01,$01,$01,$01,$01,$01,$81   ; $94 top right corner
-   .byte $81,$80,$80,$80,$80,$80,$80,$FF   ; $95 bottom left corner
-   .byte $81,$01,$01,$01,$01,$01,$01,$FF   ; $96 bottom right corner
-   .byte $FF,$00,$00,$00,$00,$00,$00,$FF   ; $97 top/bottom edge
-   .byte $81,$81,$81,$81,$81,$81,$81,$81   ; $98 left/right edge
-   .byte $FF,$80,$80,$80,$80,$80,$80,$FF   ; $99 notch, left side
-   .byte $FF,$01,$01,$01,$01,$01,$01,$FF   ; $9A notch, right side
-   .byte $FF,$81,$81,$81,$81,$81,$81,$81   ; $9B notch, top side
-   .byte $81,$81,$81,$81,$81,$81,$81,$FF   ; $9C notch, bottom side
-   ; ---- $9D-$A0: title bar ----
-   .byte $01,$01,$01,$7F,$43,$7F,$01,$01   ; $9D control-menu box
-   .byte $80,$80,$80,$BE,$9C,$88,$80,$80   ; $9E minimise (down)
-   .byte $80,$80,$88,$9C,$BE,$80,$80,$80   ; $9F maximise (up)
-   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $A0 line under title
-   ; ---- $A1-$A8: list box border (thin black line) ----
-   .byte $00,$00,$00,$00,$00,$00,$00,$01   ; $A1 top left
-   .byte $00,$00,$00,$00,$00,$00,$00,$FF   ; $A2 top
-   .byte $00,$00,$00,$00,$00,$00,$00,$80   ; $A3 top right
-   .byte $01,$01,$01,$01,$01,$01,$01,$01   ; $A4 left
-   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $A5 right
-   .byte $01,$00,$00,$00,$00,$00,$00,$00   ; $A6 bottom left
-   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $A7 bottom
-   .byte $80,$00,$00,$00,$00,$00,$00,$00   ; $A8 bottom right
-   ; ---- $A9-$AC: scroll bar ----
-   .byte $80,$80,$88,$9C,$BE,$80,$80,$FF   ; $A9 up arrow button
-   .byte $FF,$80,$80,$BE,$9C,$88,$80,$80   ; $AA down arrow button
-   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $AB track
-   .byte $FF,$80,$BE,$BE,$BE,$BE,$80,$FF   ; $AC thumb
-   ; ---- $AD-$AF: tree ----
-   .byte $00,$E0,$FF,$FF,$FF,$FF,$FF,$00   ; $AD folder icon (filled)
-   .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $AE [+] box
-   .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $AF [-] box
-   ; ---- $B0-$BF: quadrant blocks for the big banner letters ----
-   ; Number = TL*8 + TR*4 + BL*2 + BR*1 (see draw_banner).
-   .byte $00,$00,$00,$00,$00,$00,$00,$00   ; $B0 empty
-   .byte $00,$00,$00,$00,$0F,$0F,$0F,$0F   ; $B1 BR
-   .byte $00,$00,$00,$00,$F0,$F0,$F0,$F0   ; $B2 BL
-   .byte $00,$00,$00,$00,$FF,$FF,$FF,$FF   ; $B3 BL BR
-   .byte $0F,$0F,$0F,$0F,$00,$00,$00,$00   ; $B4 TR
-   .byte $0F,$0F,$0F,$0F,$0F,$0F,$0F,$0F   ; $B5 TR BR
-   .byte $0F,$0F,$0F,$0F,$F0,$F0,$F0,$F0   ; $B6 TR BL
-   .byte $0F,$0F,$0F,$0F,$FF,$FF,$FF,$FF   ; $B7 TR BL BR
-   .byte $F0,$F0,$F0,$F0,$00,$00,$00,$00   ; $B8 TL
-   .byte $F0,$F0,$F0,$F0,$0F,$0F,$0F,$0F   ; $B9 TL BR
-   .byte $F0,$F0,$F0,$F0,$F0,$F0,$F0,$F0   ; $BA TL BL
-   .byte $F0,$F0,$F0,$F0,$FF,$FF,$FF,$FF   ; $BB TL BL BR
-   .byte $FF,$FF,$FF,$FF,$00,$00,$00,$00   ; $BC TL TR
-   .byte $FF,$FF,$FF,$FF,$0F,$0F,$0F,$0F   ; $BD TL TR BR
-   .byte $FF,$FF,$FF,$FF,$F0,$F0,$F0,$F0   ; $BE TL TR BL
-   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $BF full
+   .byte $FF,$80,$80,$80,$80,$80,$80,$81   ; $80 top left corner
+   .byte $FF,$01,$01,$01,$01,$01,$01,$81   ; $81 top right corner
+   .byte $81,$80,$80,$80,$80,$80,$80,$FF   ; $82 bottom left corner
+   .byte $81,$01,$01,$01,$01,$01,$01,$FF   ; $83 bottom right corner
+   .byte $FF,$00,$00,$00,$00,$00,$00,$FF   ; $84 top/bottom edge
+   .byte $81,$81,$81,$81,$81,$81,$81,$81   ; $85 left/right edge
+   .byte $FF,$80,$80,$80,$80,$80,$80,$FF   ; $86 notch, left side
+   .byte $FF,$01,$01,$01,$01,$01,$01,$FF   ; $87 notch, right side
+   .byte $FF,$81,$81,$81,$81,$81,$81,$81   ; $88 notch, top side
+   .byte $81,$81,$81,$81,$81,$81,$81,$FF   ; $89 notch, bottom side
+   ; ---- $8A-$8D: title bar ----
+   .byte $01,$01,$01,$7F,$43,$7F,$01,$01   ; $8A control-menu box
+   .byte $80,$80,$80,$BE,$9C,$88,$80,$80   ; $8B minimise (down)
+   .byte $80,$80,$88,$9C,$BE,$80,$80,$80   ; $8C maximise (up)
+   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $8D line under title
+   ; ---- $8E-$95: list box border (thin black line) ----
+   .byte $00,$00,$00,$00,$00,$00,$00,$01   ; $8E top left
+   .byte $00,$00,$00,$00,$00,$00,$00,$FF   ; $8F top
+   .byte $00,$00,$00,$00,$00,$00,$00,$80   ; $90 top right
+   .byte $01,$01,$01,$01,$01,$01,$01,$01   ; $91 left
+   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $92 right
+   .byte $01,$00,$00,$00,$00,$00,$00,$00   ; $93 bottom left
+   .byte $FF,$00,$00,$00,$00,$00,$00,$00   ; $94 bottom
+   .byte $80,$00,$00,$00,$00,$00,$00,$00   ; $95 bottom right
+   ; ---- $96-$99: scroll bar ----
+   .byte $80,$80,$88,$9C,$BE,$80,$80,$FF   ; $96 up arrow button
+   .byte $FF,$80,$80,$BE,$9C,$88,$80,$80   ; $97 down arrow button
+   .byte $80,$80,$80,$80,$80,$80,$80,$80   ; $98 track
+   .byte $FF,$80,$BE,$BE,$BE,$BE,$80,$FF   ; $99 thumb
+   ; ---- $9A-$9C: tree ----
+   .byte $00,$E0,$FF,$FF,$FF,$FF,$FF,$00   ; $9A folder icon (filled)
+   .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $9B [+] box
+   .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $9C [-] box
+glyphs_end:
