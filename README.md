@@ -4,17 +4,17 @@ A mouse-driven program launcher for the [Commander X16](https://www.commanderx16
 
 Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it. It's styled after a Windows 3.1 window.
 
-![GUIMenu running in the X16 emulator](docs/screenshot-win31.png)
+![GUIMenu running in the X16 emulator](docs/screenshot-darkblue.png)
 
 ## Features
 
-- **Folder tree:** shows the folders on the SD card. Click a folder to open it. Click its `[+]`/`[-]` box to expand or collapse it.
-- **File list:** shows the files in the open folder, sorted alphabetically. Programs (`.PRG`) are shown in blue.
+- **Folder tree:** shows the folders on the SD card, each with an orange folder icon. Click a folder to open it. Click its `[+]`/`[-]` box to expand or collapse it.
+- **File list:** shows the files in the open folder, sorted alphabetically. Programs (`.PRG`) are shown in blue and other files in grey, so the programs stand out.
 - **Double-click to run:** double-click a `.PRG` to load and run it. The program starts in its own folder, so it can find its data files.
 - **Scroll bars:** click the arrows to scroll a line (hold to repeat), click the track to scroll a page, or drag the thumb. The mouse wheel scrolls the list under the pointer.
 - **Windows 3.1 look:** a dark blue desktop, a window with a sizing border, a navy title bar, white list boxes and a status line. The control box and minimise/maximise buttons are decoration only.
 - **Status line:** shows the path of the open folder, e.g. `/GAMES/ARCADE`.
-- **Desktop icon:** the Commander X16 logo, as shown on the boot screen, captioned "Commander X16".
+- **Desktop icon:** the Commander X16 logo, as shown on the boot screen, with "Commander X16" in big letters beside it.
 - **Preview panel:** reserved for showing an image of the selected program (not implemented yet).
 
 ## Requirements

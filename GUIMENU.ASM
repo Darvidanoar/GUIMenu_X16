@@ -4,8 +4,9 @@
 ; A mouse driven program launcher for the Commander X16, styled
 ; after a Windows 3.1 window on a dark blue desktop.
 ;
-;   [logo]                                     <- desktop icon
-;   Commander X16
+;   [logo]  COMMANDER X16                      <- desktop icon, with
+;                                                   the name in big
+;                                                   letters beside it
 ;  +==========================================================+
 ;  |[-]            SD Card Program Launcher             [v][^]|
 ;  |----------------------------------------------------------|
@@ -98,8 +99,10 @@ SCREEN_ROWS       = 60
 ; desktop icon
 LOGO_X            = 4             ; top left corner of the 7x7 logo
 LOGO_Y            = 0
-CAPTION_X         = 1             ; "Commander X16" under the logo
-CAPTION_Y         = 7
+BANNER_X          = 13            ; "Commander X16" in big letters
+BANNER_Y          = 2             ;   beside the logo: 4 rows, 4
+                                  ;   columns per letter
+BANNER_MAX        = 16            ; most letters the banner can hold
 
 ; the window
 WIN_L             = 1             ; left border column
@@ -167,7 +170,7 @@ COL_FRAME         = $FC           ; black on light grey
 COL_TITLE         = $91           ; white on navy
 COL_LABEL         = $FC           ; black on light grey
 COL_LIST          = $1C           ; black on white
-COL_FILE          = $1B           ; ordinary file: mid grey on white
+COL_FILE          = $1B           ; ordinary file: grey on white
 COL_PRG           = $16           ; blue on white
 COL_SEL           = $91           ; selected item: white on navy
 COL_SEL_PRG       = $97           ; selected program: yellow on navy
@@ -176,6 +179,8 @@ COL_EMPTY         = $1B           ; "(no files)": grey on white
 COL_ERROR         = $12           ; error in a list: red on white
 COL_STATUS        = $FC           ; status line: black on light grey
 COL_STATUS_ERR    = $F2           ; error on status line: red
+COL_BANNER        = $A1           ; big "Commander X16": white on
+                                  ;   dark blue
 
 ;------------------------------------------------------------------
 ; Custom characters
@@ -221,7 +226,11 @@ CH_SB_THUMB       = $AC           ; the thumb
 CH_FOLDER         = $AD           ; folder icon
 CH_PLUS           = $AE           ; [+] box
 CH_MINUS          = $AF           ; [-] box
-GLYPH_COUNT       = $B0 - GLYPH_BASE ; number of custom characters
+
+CH_QUAD           = $B0           ; $B0-$BF: the 16 "quadrant" blocks
+                                  ;   used for the big letters (see
+                                  ;   draw_banner)
+GLYPH_COUNT       = $C0 - GLYPH_BASE ; number of custom characters
 
 ;------------------------------------------------------------------
 ; Zero page variables. Only zero page locations can be used as
@@ -291,6 +300,8 @@ pathbuf:          .res 256        ; "/GAMES/ARCADE" for the status line
 chain:            .res MAX_DEPTH+1 ; nodes from the root down to the
                                   ;   folder being opened
 pal_save:         .res 32         ; the original palette entries 0-15
+banner_buf:       .res BANNER_MAX*8 ; font shapes of the banner's
+                                  ;   letters, 8 bytes each
 
 ;------------------------------------------------------------------
 .segment "CODE"

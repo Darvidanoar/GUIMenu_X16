@@ -69,17 +69,18 @@ init_screen:
    ; Copy our custom character shapes into the character set,
    ; starting at character GLYPH_BASE ($1F000 + $80*8 = $1F400).
    ; VERA_SET_ADDR (from x16.inc) sets the address with increment 1.
-   ; There are more than 256 bytes, so it is done in two loops.
+   ; There are exactly 512 bytes (64 characters), so it is done in
+   ; two loops of 256, each ending when X wraps round to 0.
+   .assert GLYPH_COUNT*8 = 512, error, "glyph copy expects 512 bytes"
    VERA_SET_ADDR (VRAM_petscii + GLYPH_BASE*8), 1
    ldx #0
 :  lda glyphs,x                   ; first 256 bytes
    sta VERA_data0
    inx
-   bne :-                         ; until X wraps round to 0
-:  lda glyphs+256,x               ; the rest
+   bne :-
+:  lda glyphs+256,x               ; second 256 bytes
    sta VERA_data0
    inx
-   cpx #GLYPH_COUNT*8-256
    bne :-
 
    ; Fill the whole screen with the desktop colour.
@@ -150,7 +151,7 @@ restore_palette:
 pal_new:
    .byte $09, $08, $00            ; 9 navy       #008
    .byte $0A, $04, $00            ; A dark blue  #004
-   .byte $0B, $88, $08            ; B grey       #888
+   .byte $0B, $66, $06            ; B grey       #666
    .byte $0C, $00, $00            ; C black      #000
    .byte $0F, $CC, $0C            ; F light grey #CCC
    .byte $FF
@@ -401,8 +402,8 @@ pet_to_screen:
    rts
 
 ;------------------------------------------------------------------
-; draw_desktop_icon - the X16 logo with "Commander X16" under it,
-; like a program icon on the Windows 3.1 desktop.
+; draw_desktop_icon - the X16 logo with "Commander X16" in big
+; letters beside it.
 ;
 ; The logo is the same one the X16 shows when it starts: 7 rows of
 ; 7 characters (see "logo" below), each row in its own colour.
@@ -444,15 +445,146 @@ draw_desktop_icon:
    cpy #7
    bne @row
 
-   ; the caption
-   lda #<str_caption
-   sta sptr
-   lda #>str_caption
-   sta sptr+1
-   ldx #CAPTION_X
-   ldy #CAPTION_Y
-   lda #COL_DESKTOP
-   jmp print_at
+   jmp draw_banner                ; then the big caption
+
+;------------------------------------------------------------------
+; draw_banner - "Commander X16" (str_caption) in letters 4 times the
+; normal size, at BANNER_X, BANNER_Y.
+;
+; Each letter is taken from the X16's own font, already in VRAM: a
+; character is 8x8 pixels, stored as 8 bytes (one per pixel row,
+; leftmost pixel in bit 7). Blown up 4 times, every font pixel
+; becomes a 4x4 square, so one screen cell (8x8) holds a 2x2 group
+; of font pixels:
+;
+;      font pixels          one screen cell
+;      TL TR          ->    +----+----+
+;      BL BR                | TL | TR |   each quarter is filled
+;                           +----+----+   if its font pixel is set
+;                           | BL | BR |
+;                           +----+----+
+;
+; There are 16 ways to fill the quarters, so there are 16 custom
+; "quadrant" characters, CH_QUAD+0 to CH_QUAD+15. The number added
+; to CH_QUAD is built from the four pixels:
+;     TL*8 + TR*4 + BL*2 + BR*1
+;
+; So one letter (8x8 pixels) covers 4x4 screen cells: font pixel
+; rows 0+1 make cell row 0, rows 2+3 make cell row 1, and so on;
+; pixel columns 0+1 make cell column 0, and so on.
+;
+; Step 1 copies the font shapes of all the letters into banner_buf
+; (8 bytes per letter). Step 2 draws the banner one cell row at a
+; time, going across all the letters.
+;------------------------------------------------------------------
+draw_banner:
+   ; ---- step 1: copy the letters' shapes out of VRAM ----
+   ldy #0                         ; Y = letter number
+@fetch:
+   lda str_caption,y
+   beq @fetched                   ; 0 = end of the string
+   jsr pet_to_screen              ; character number in the font
+
+   ; VRAM address of its shape = VRAM_petscii + character * 8.
+   ; The character is below $80, so character * 8 fits in 10 bits:
+   ; work it out in tmp (low) and tmp+1 (high).
+   sta tmp
+   stz tmp+1
+   asl tmp                        ; * 2
+   rol tmp+1
+   asl tmp                        ; * 4
+   rol tmp+1
+   asl tmp                        ; * 8
+   rol tmp+1
+   lda tmp
+   clc
+   adc #<VRAM_petscii
+   sta VERA_addr_low
+   lda tmp+1
+   adc #>VRAM_petscii
+   sta VERA_addr_high
+   lda #$10 | ^VRAM_petscii       ; increment 1, and bit 16 of the
+   sta VERA_addr_bank             ;   address ($1F000 is in bank 1)
+
+   ; read its 8 bytes into banner_buf + letter * 8
+   tya
+   asl
+   asl
+   asl
+   tax                            ; X = letter * 8
+   lda #8
+   sta tmp+2                      ; bytes left to copy
+:  lda VERA_data0                 ; reading also steps the address on
+   sta banner_buf,x
+   inx
+   dec tmp+2
+   bne :-
+
+   iny
+   cpy #BANNER_MAX
+   bne @fetch                     ; (stop if the string is too long)
+@fetched:
+   sty tmp+3                      ; tmp+3 = number of letters
+
+   ; ---- step 2: draw it, one cell row (2 font rows) at a time ----
+   lda #COL_BANNER
+   sta cur_color
+   ldy #0                         ; Y = cell row 0..3
+@row:
+   phy
+   tya
+   clc
+   adc #BANNER_Y                  ; screen row = BANNER_Y + cell row
+   tay
+   ldx #BANNER_X
+   jsr set_cursor
+   ply
+   lda #SCREEN_COLS-BANNER_X      ; never draw past the right edge
+   sta remain
+
+   ; X = where this cell row's top font row is in banner_buf, for
+   ; the first letter: font row = cell row * 2
+   tya
+   asl
+   tax
+   lda tmp+3
+   sta tmp+2                      ; letters left on this row
+@letter:
+   lda banner_buf,x               ; top font row of the pair
+   sta tmp
+   lda banner_buf+1,x             ; bottom font row of the pair
+   sta tmp+1
+   phx
+   ldx #4                         ; 4 cells across each letter
+@cell:
+   ; Shift the next 2 pixels out of each font row (leftmost first)
+   ; and roll them into A, so A ends up as TL*8 + TR*4 + BL*2 + BR.
+   lda #0
+   asl tmp                        ; TL -> carry
+   rol                            ;    -> A
+   asl tmp                        ; TR
+   rol
+   asl tmp+1                      ; BL
+   rol
+   asl tmp+1                      ; BR
+   rol
+   ora #CH_QUAD                   ; the quadrant character
+   jsr put_char                   ; (keeps X and Y)
+   dex
+   bne @cell
+   plx
+
+   txa                            ; on to the same font rows of the
+   clc                            ;   next letter, 8 bytes further on
+   adc #8
+   tax
+   dec tmp+2
+   bne @letter
+
+   iny
+   cpy #4
+   bne @row
+   rts
 
 ;------------------------------------------------------------------
 ; draw_window - the window: border, title bar, grey client area,
@@ -1041,3 +1173,21 @@ glyphs:
    .byte $00,$E0,$FF,$FF,$FF,$FF,$FF,$00   ; $AD folder icon (filled)
    .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $AE [+] box
    .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $AF [-] box
+   ; ---- $B0-$BF: quadrant blocks for the big banner letters ----
+   ; Number = TL*8 + TR*4 + BL*2 + BR*1 (see draw_banner).
+   .byte $00,$00,$00,$00,$00,$00,$00,$00   ; $B0 empty
+   .byte $00,$00,$00,$00,$0F,$0F,$0F,$0F   ; $B1 BR
+   .byte $00,$00,$00,$00,$F0,$F0,$F0,$F0   ; $B2 BL
+   .byte $00,$00,$00,$00,$FF,$FF,$FF,$FF   ; $B3 BL BR
+   .byte $0F,$0F,$0F,$0F,$00,$00,$00,$00   ; $B4 TR
+   .byte $0F,$0F,$0F,$0F,$0F,$0F,$0F,$0F   ; $B5 TR BR
+   .byte $0F,$0F,$0F,$0F,$F0,$F0,$F0,$F0   ; $B6 TR BL
+   .byte $0F,$0F,$0F,$0F,$FF,$FF,$FF,$FF   ; $B7 TR BL BR
+   .byte $F0,$F0,$F0,$F0,$00,$00,$00,$00   ; $B8 TL
+   .byte $F0,$F0,$F0,$F0,$0F,$0F,$0F,$0F   ; $B9 TL BR
+   .byte $F0,$F0,$F0,$F0,$F0,$F0,$F0,$F0   ; $BA TL BL
+   .byte $F0,$F0,$F0,$F0,$FF,$FF,$FF,$FF   ; $BB TL BL BR
+   .byte $FF,$FF,$FF,$FF,$00,$00,$00,$00   ; $BC TL TR
+   .byte $FF,$FF,$FF,$FF,$0F,$0F,$0F,$0F   ; $BD TL TR BR
+   .byte $FF,$FF,$FF,$FF,$F0,$F0,$F0,$F0   ; $BE TL TR BL
+   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF   ; $BF full
