@@ -96,6 +96,8 @@ dos_command:
 ; "BLOCKS FREE." (ignored by parse_line because it has no quotes).
 ;------------------------------------------------------------------
 read_dir:
+   lda #$FE                       ; a new list: the preview must be
+   sta pv_want                    ;   worked out again
    stz file_count
    stz tdir_count
    lda #1                         ; assume the worst until the
@@ -253,7 +255,11 @@ parse_line:
    bcs @ignore                    ;   replace (none: all programs)
    bra @store_file
 @not_prg:
-   lda file_count
+   jsr is_png                     ; mark pictures, for the preview
+   bcc :+
+   lda #FLAG_PNG
+   sta recbuf+REC_FLAGS
+:  lda file_count
    cmp #MAX_FILES
    bcs @ignore                    ; list full: drop it
 @add_file:
@@ -336,7 +342,14 @@ name_to_recbuf:
 ; ASCII upper and lower case letters differ only in bit 5 ($20), so
 ; AND #$DF turns either into upper case before comparing.
 ;------------------------------------------------------------------
+; is_png - the same for ".PNG"
+;------------------------------------------------------------------
 is_prg:
+   ldy #ext_prg-exts
+   bra has_ext
+is_png:
+   ldy #ext_png-exts
+has_ext:                          ; Y = the extension in exts
    lda namelen
    cmp #4
    bcc @no                        ; too short
@@ -346,21 +359,27 @@ is_prg:
    bne @no
    lda namebuf-3,x
    and #$DF
-   cmp #$50                       ; 'P'
+   cmp exts,y
    bne @no
    lda namebuf-2,x
    and #$DF
-   cmp #$52                       ; 'R'
+   cmp exts+1,y
    bne @no
    lda namebuf-1,x
    and #$DF
-   cmp #$47                       ; 'G'
+   cmp exts+2,y
    bne @no
    sec
    rts
 @no:
    clc
    rts
+
+; ASCII, upper case (written as numbers: the assembler would turn
+; letters in quotes into PETSCII)
+exts:
+ext_prg: .byte $50, $52, $47      ; PRG
+ext_png: .byte $50, $4E, $47      ; PNG
 
 .pushseg
 .segment "BSS"

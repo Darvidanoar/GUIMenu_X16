@@ -16,7 +16,7 @@ Browse the folders on your SD card, see the files in each one, and double-click 
 - **Amiga Workbench look:** a grey window with raised 3D edges and a blue title bar, sunken list boxes and a status line, on a dark blue desktop. The close, zoom and depth gadgets are decoration only.
 - **Status line:** shows the path of the open folder, e.g. `/GAMES/ARCADE`.
 - **Desktop logo:** the Commander X16 logo picture at the top left, drawn with five 64x64 hardware sprites.
-- **Preview panel:** reserved for showing an image of the selected program (not implemented yet).
+- **Preview panel:** shows a `.PNG` picture from the open folder, shrunk (or enlarged) to fit. If the highlighted file is a `.PNG`, that one is shown; otherwise the first `.PNG` in the folder is. So putting `GAME.PNG` next to `GAME.PRG` gives the folder a picture. See [Preview pictures](#preview-pictures).
 
 ## Requirements
 
@@ -88,6 +88,15 @@ The keyboard moves in one list at a time: the one whose highlight bar is blue. T
 | `RETURN` | Go to the file list | Run the highlighted program |
 | `Q`, `ESC` or `RUN/STOP` | Quit to BASIC | Quit to BASIC |
 
+## Preview pictures
+
+GUIMenu decodes the PNG itself on the X16, so any normal PNG works. That includes greyscale, colour, palette and transparent images, at any bit depth (1, 2, 4, 8 or 16 bits). Interlaced PNGs aren't supported. Rows can be up to 8192 bytes, so RGB images up to 2730 pixels wide.
+
+- **Fitting:** the picture is scaled to fit the 128x336 pixel panel, keeping its shape, and centred across the panel.
+- **Colours:** VERA shows 4096 colours, 256 at once. The preview gets 111 of the 256 palette entries. Each colour in the picture is reduced to 4 bits per channel and given its own entry. Screenshots of X16 programs come out exact. Pictures with more than 111 colours, such as photos, use the closest colour once the entries run out.
+- **Speed:** decoding happens on the 8 MHz 6502, so a big picture takes a while. A 640x480 screenshot (the size the emulator saves) takes about 10 seconds; 320x240 takes about 2.5 seconds; 128x96 takes 1-1.5 seconds. Smaller PNGs show up faster, so shrink large screenshots before copying them to the SD card. Decoding starts a third of a second after you stop moving through the lists, and stops when you press a key or click, so it never gets in the way.
+- **Transparency:** pixels that are more than half transparent show the panel's grey background.
+
 ## How programs are launched
 
 Most X16 programs load at `$0801`, which is where GUIMenu is running. So GUIMenu can't load them itself without overwriting its own code. It handles this in one of two ways:
@@ -100,6 +109,7 @@ Most X16 programs load at `$0801`, which is where GUIMenu is running. So GUIMenu
 - Up to 255 files per folder and 250 folders in the tree. If a folder has more files than that, programs are always listed and some of the other files are left out.
 - File and folder names are stored up to 61 characters.
 - Names are sent to DOS in upper case. This works because CMDR-DOS ignores case when it looks for a file.
+- Preview pictures: no interlaced PNGs, and up to 8192 bytes per row. The checksums in the file are not checked.
 
 ## Project layout
 
@@ -110,6 +120,7 @@ Most X16 programs load at `$0801`, which is where GUIMenu is running. So GUIMenu
 | `TREE.ASM` | The folder tree and record storage in banked RAM |
 | `DOS.ASM` | DOS commands and reading directory listings |
 | `LAUNCH.ASM` | Loading and running the chosen program |
+| `PNG.ASM` | The preview panel: finding, decoding (inflate, row filters) and showing PNG pictures |
 | `INC/x16.inc` | X16 addresses, KERNAL routines and macros |
 | `CommanderX16_320.png` | The logo picture (320x55) |
 | `LOGO.PAL`, `LOGO.RLE` | The logo's colours and pixels, made from the PNG and included in the program |

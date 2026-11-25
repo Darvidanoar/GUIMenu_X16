@@ -31,7 +31,9 @@
 ;   - Middle list: the files in the open folder. Programs (.PRG)
 ;                  are listed first, in blue. Double-click one to
 ;                  run it.
-;   - Right panel: preview (empty for now).
+;   - Right panel: a preview of the folder's picture: the
+;                  highlighted .PNG file, or else the first .PNG
+;                  in the folder, shrunk to fit (see PNG.ASM).
 ;   - Scroll bars: as on the Amiga, both arrows are at the bottom.
 ;                  Click the arrows to scroll a line (hold to
 ;                  repeat), click the track above/below the thumb
@@ -57,6 +59,7 @@
 ;   TREE.ASM     the folder tree and record storage in banked RAM
 ;   DOS.ASM      sending DOS commands and reading directory listings
 ;   LAUNCH.ASM   loading and running the chosen program
+;   PNG.ASM      the preview panel: decoding and showing PNG files
 ;
 ; Build:  make
 ;         (runs: cl65 -t cx16 -C cx16-asm.cfg -u __EXEHDR__ ...)
@@ -76,7 +79,7 @@ KBDBUF_PUT        := $FEC3
 ;
 ; The X16 has 8 KB "windows" of banked RAM at $A000-$BFFF. Writing a
 ; bank number to RAM_BANK ($00) chooses which 8 KB bank appears
-; there. Bank 0 is used by the KERNAL and DOS, so we use banks 1-5.
+; there. Bank 0 is used by the KERNAL and DOS, so we use banks 1-10.
 ;
 ; Every folder name and file name is stored as a 64 byte "record",
 ; so one 8 KB bank holds 128 records:
@@ -89,6 +92,8 @@ KBDBUF_PUT        := $FEC3
 TREE_BANK         = 1             ; banks 1-2 : folder tree nodes
 FILE_BANK         = 3             ; banks 3-4 : files in current folder
 TDIR_BANK         = 5             ; bank 5    : sub-folders just read
+                                  ; banks 6-10: the PNG decoder (see
+                                  ;   WIN_BANK and MAP_BANK in PNG.ASM)
 
 REC_DEPTH         = 0             ; offsets inside a record
 REC_FLAGS         = 1
@@ -107,6 +112,7 @@ MAX_DEPTH         = 30            ; deepest folder level we will open
 FLAG_EXPANDED     = $01           ; tree node's sub-folders are shown
 FLAG_NOKIDS       = $02           ; tree node has no sub-folders
 FLAG_PRG          = $01           ; file name ends in .PRG
+FLAG_PNG          = $02           ; file name ends in .PNG
 
 ;------------------------------------------------------------------
 ; Screen layout (80 columns x 60 rows text mode)
@@ -124,8 +130,9 @@ LOGO_X            = 16            ; top left corner, in pixels
 LOGO_Y            = 8
 LOGO_SPRITES      = 5             ; sprites 1-5 (sprite 0 is the mouse)
 LOGO_SPR_BYTES    = 64*64         ; 64x64 pixels, 1 byte per pixel
-LOGO_VRAM         = $04000        ; where the sprite pixels go in VRAM
-                                  ;   (unused in text mode)
+LOGO_VRAM         = $0B000        ; where the sprite pixels go in VRAM
+                                  ;   ($0B000-$0FFFF; below it are the
+                                  ;   preview's tiles, see PNG.ASM)
 LOGO_PAL_FIRST    = 128           ; logo colours: palette entries 128-255
 
 ; the window. Its raised outer edge is drawn on the desktop cells
@@ -357,6 +364,7 @@ start:
    jsr init_screen                ; text mode, palette, glyphs, desktop
    jsr show_logo                  ; the Commander X16 logo sprites
    jsr draw_window                ; the window and its empty boxes
+   jsr preview_init               ; layer 0 for the preview picture
 
    ; Turn the mouse pointer on. SCREEN_MODE with carry set returns
    ; the screen size in X and Y, which is what MOUSE_CONFIG wants.
@@ -448,7 +456,11 @@ main_loop:
 @buttons_done:
    lda buttons
    sta prev_buttons
-   bra main_loop
+
+   ; the preview picture: decode it once the selection has stayed
+   ; the same for a moment (see PNG.ASM)
+   jsr preview_tick
+   jmp main_loop
 
 ;------------------------------------------------------------------
 ; quit - restore the normal screen and go back to BASIC's READY.
@@ -1345,6 +1357,7 @@ restore_system:
    ldy #0
    jsr MOUSE_CONFIG               ; A = 0: hide the mouse pointer
    jsr hide_logo
+   jsr preview_off
    jsr restore_palette
    stz RAM_BANK
    jsr CLRCHN
@@ -1357,3 +1370,4 @@ restore_system:
 .include "TREE.ASM"
 .include "DOS.ASM"
 .include "LAUNCH.ASM"
+.include "PNG.ASM"

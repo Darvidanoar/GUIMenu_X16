@@ -712,8 +712,9 @@ draw_window:
    ldy #PREV_R
    jsr draw_listbox
 
-   ; the preview box is just empty inside, for now
-   lda #COL_LIST
+   ; the preview box: see-through, so the picture on layer 0
+   ; (PNG.ASM) shows through
+   lda #COL_PV_CLEAR
    sta cur_color
    lda #PREV_W
    sta fill_n
@@ -1025,7 +1026,9 @@ draw_files:
    lda file_scroll
    sta sb_scroll
    ldx #FILE_SB
-   jmp draw_scrollbar
+   jsr draw_scrollbar
+   jmp preview_update             ; the list (or highlight) may have
+                                  ;   changed: which picture now?
 
 ;------------------------------------------------------------------
 ; draw_status - show the open folder's path (e.g. /GAMES/ARCADE)
