@@ -42,8 +42,9 @@
 ;   - Keyboard: Tab switches between the folder and file lists
 ;     (the one with the blue highlight bar has the "focus"). Up,
 ;     Down, Page Up, Page Down, Home and End move through it;
-;     moving in the folder list opens that folder. Right opens the
-;     first sub-folder of the open folder and Left opens its parent,
+;     moving in the folder list opens that folder (without
+;     expanding it). Right expands the open folder and opens its
+;     first sub-folder, and Left opens its parent,
 ;     whichever list has the focus. RETURN on a program runs it.
 ;   - Q, ESC or RUN/STOP quits back to BASIC.
 ;
@@ -612,7 +613,8 @@ calc_scroll:
 ;   Up, Down         move the highlight one line
 ;   Page Up/Down     move it a page
 ;   Home, End        move it to the first / last item
-;   Right            open the open folder's first sub-folder
+;   Right            expand the open folder and open its first
+;                    sub-folder
 ;   Left             open the open folder's parent
 ;                    (Left and Right work in either list)
 ;   RETURN           folders: go to the file list
@@ -620,7 +622,8 @@ calc_scroll:
 ;   Q, ESC, RUN/STOP quit
 ;
 ; In the folder list the highlight is the open folder, so moving it
-; opens a folder, just like clicking one.
+; opens a folder, like clicking one, except that it isn't expanded:
+; Down goes to the next folder down the list, not into this one.
 ;==================================================================
 
 ;------------------------------------------------------------------
@@ -748,9 +751,9 @@ move_to:
    dec a
 :  ldx focus
    bne @file
-   cmp tree_sel                   ; the tree: open that folder
-   beq @done
-   jmp select_node                ; (it also scrolls the tree)
+   cmp tree_sel                   ; the tree: open that folder,
+   beq @done                      ;   without expanding it
+   jmp open_node                  ; (it also scrolls the tree)
 @file:
    sta file_sel
    lda #$FF
@@ -761,8 +764,9 @@ move_to:
    rts
 
 ;------------------------------------------------------------------
-; key_right  - go down a level: open the first sub-folder of the
-;              open folder (expanding it first if it is collapsed)
+; key_right  - go down a level: expand the open folder (if it is
+;              collapsed) and open its first sub-folder, which is
+;              left collapsed until Right is pressed again
 ; key_left   - go up a level: open the open folder's parent
 ; key_return - folders: go to the file list; files: run the
 ;              highlighted program
@@ -782,8 +786,10 @@ key_right:
    bne @done                      ; it has no sub-folders
    bit #FLAG_EXPANDED
    bne @open                      ; sub-folders already in the tree
-   lda tree_sel                   ; collapsed: put them back (they
-   jsr insert_children            ;   were read when it was opened)
+   ldx dir_error
+   bne @done                      ; its listing couldn't be read
+   lda tree_sel                   ; collapsed: add them (they were
+   jsr insert_children            ;   read when it was opened)
 @open:
    ldx tree_sel                   ; the node after it...
    inx
@@ -800,7 +806,7 @@ key_right:
    bcc @done                      ;   or it isn't a sub-folder
    lda tree_sel
    inc a
-   jmp select_node
+   jmp open_node                  ; open it, still collapsed
 @done:
    rts
 
@@ -820,7 +826,7 @@ key_left:
    cmp tmp
    bne @scan
    txa
-   jmp select_node
+   jmp open_node
 @done:
    rts
 
@@ -1253,13 +1259,22 @@ tree_click:
    rts
 
 ;------------------------------------------------------------------
-; select_node - open a folder
+; select_node - open a folder and expand it
+; open_node   - open a folder but leave it collapsed (the keyboard
+;               uses this, so Down steps to the next folder instead
+;               of into the sub-folders; Right expands it)
 ; In: A = tree node
 ;
 ; Changes the DOS current directory to that folder, reads its
-; listing, adds its sub-folders to the tree if they aren't shown yet,
-; then redraws the tree, file list and path.
+; listing, adds its sub-folders to the tree if they aren't shown yet
+; (select_node only), then redraws the tree, file list and path.
 ;------------------------------------------------------------------
+open_node:
+   sta tree_sel
+   jsr goto_node                  ; DOS "CD" to the folder
+   jsr read_dir                   ; read its files and sub-folders
+   bra open_common
+
 select_node:
    sta tree_sel
    jsr goto_node                  ; DOS "CD" to the folder
@@ -1278,6 +1293,7 @@ select_node:
    lda tree_sel
    jsr insert_children
 :
+open_common:
    ; new folder: file list back at the top, and no file highlighted
    ; unless the keyboard is in the file list, when the first file
    ; is highlighted so Up and Down carry on working

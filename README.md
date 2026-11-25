@@ -80,10 +80,10 @@ The keyboard moves in one list at a time: the one whose highlight bar is blue. T
 | Key | Folder list | File list |
 | --- | --- | --- |
 | `Tab` / `Shift+Tab` | Go to the file list | Go to the folder list |
-| `Up` / `Down` | Open the folder above / below | Move the highlight one file |
+| `Up` / `Down` | Open the folder above / below (without expanding it) | Move the highlight one file |
 | `Page Up` / `Page Down` | Move a page | Move a page |
 | `Home` / `End` | Open the first / last folder | First / last file |
-| `Right` | Open the first sub-folder of the open folder | Same |
+| `Right` | Expand the open folder and open its first sub-folder | Same |
 | `Left` | Open the parent of the open folder | Same |
 | `RETURN` | Go to the file list | Run the highlighted program |
 | `Q`, `ESC` or `RUN/STOP` | Quit to BASIC | Quit to BASIC |
