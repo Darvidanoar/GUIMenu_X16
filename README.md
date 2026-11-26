@@ -4,7 +4,11 @@ A mouse-driven program launcher for the [Commander X16](https://www.commanderx16
 
 Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it. It's styled after an Amiga Workbench 2.0/3.1 window.
 
-Preview images can be added to the folder as PNG files making them easy to create.  The typical way to create preview images would be to launch the game in the emulator and hit ctrl-p to take a screenshot.
+Preview images can be added to the folder as PNG files making them easy to create.  The typical way to create preview images would be to launch the game in the emulator and hit ctrl-p to take a screenshot.  Navigating to a folder will load the first PNG file (alphabetically) into the preview panel.  Loading images into the preview panel is not fast, but there is no need to wait for the load to complete before moving onto another folder.
+
+Selecting any other `.PNG` files in the folder will load it into the previw panel.
+
+Selecting a `.TXT` or `.MD` file will load them into the preview panel.
 
 ![GUIMenu running in the X16 emulator](docs/screenshot.png)
 
