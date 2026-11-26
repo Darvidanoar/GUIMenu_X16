@@ -3,8 +3,10 @@
 ; folder, decode it and show it, shrunk (or enlarged) to fit.
 ;
 ; WHICH PICTURE
-; If the highlighted file is a .PNG, that one is shown. Otherwise
-; the first .PNG in the folder's file list is shown, so a folder
+; If the highlighted file is a .TXT or .MD file, its text is shown
+; instead of a picture (see TEXT.ASM). If it is a .PNG, that one is
+; shown. Otherwise the first .PNG in the folder's file list is
+; shown, so a folder
 ; holding GAME.PRG and GAME.PNG gets its picture as soon as it is
 ; opened. Decoding a PNG takes a while on an 8 MHz 6502 (seconds
 ; for a big one), so it starts PREVIEW_DELAY frames after the
@@ -14,17 +16,25 @@
 ;
 ; HOW THE PICTURE IS SHOWN
 ; The text screen is VERA layer 1. This file switches on layer 0,
-; underneath it, as a "tile" layer with 8x8 pixel tiles of 256
-; colours (1 byte per pixel). Its map lines up exactly with the
-; text cells. Every cell of the preview panel gets its own tile
-; (tiles 1-672, PREV_W x LIST_ROWS of them), so together the
-; panel's tiles act like a 128x336 pixel bitmap. Everywhere else
-; the map uses tile 0, which is all colour 0 = see-through.
-; The panel's text cells are colour $00 (see-through background
-; and foreground), so the tiles show through them.
+; underneath it, as a "tile" layer with 16x16 pixel tiles of 256
+; colours (1 byte per pixel, so 256 bytes per tile). The panel is
+; 320x240 screen pixels, a grid of 20 x 15 tiles (tiles 1-300),
+; which together act like a 320x240 bitmap. Everywhere else the
+; map uses tile 0, which is all colour 0 = see-through. The
+; panel's text cells are colour $00 (see-through background and
+; foreground), so the tiles show through them.
 ;
-;   pixel (x,y) of the panel is in tile 1 + (y/8)*16 + x/8,
-;   at byte (y mod 8)*8 + (x mod 8) of that tile's 64 bytes.
+;   pixel (x,y) of the panel is in tile 1 + (y/16)*20 + x/16,
+;   at byte (y mod 16)*16 + (x mod 16) of that tile's 256 bytes.
+;
+; The panel is 320 pixels wide, more than the 8-bit X and Y
+; registers can count, so the tables and the row buffer that run
+; across the panel are walked with 16-bit pointers instead.
+;
+; A tile is 16 pixels each way but a text cell is 8, so the panel
+; may start half way across a tile. If it does, the layer is
+; scrolled by 8 pixels (PV_HSCROLL, PV_VSCROLL) to line the tiles
+; up with it.
 ;
 ; COLOURS
 ; VERA can show 256 colours, each chosen from 4096 (4 bits each of
@@ -83,9 +93,10 @@
 ; pixels that are needed for the shrunk picture and writes them
 ; into the tiles.
 ;
-; Timing on the 8 MHz X16: a 640x480 RGB screenshot takes about
-; 10 seconds (most of it copying and unfiltering its 900 KB of
-; pixel data), 320x240 about 2-3 seconds.
+; Timing on the 8 MHz X16, filling the 320x240 panel: a 640x480
+; RGB screenshot takes about 12 seconds (much of it copying and
+; unfiltering its 900 KB of pixel data), 320x240 about 5 seconds
+; (most of it choosing a colour for each of the 76800 pixels).
 ;
 ; Not supported (a message says so): interlaced PNGs, and rows of
 ; more than 8192 bytes (e.g. wider than 2730 pixels in RGB).
@@ -96,10 +107,12 @@ MACPTR            := $FF44        ; read many bytes from a file
 KBDBUF_PEEK       := $FEBD        ; X = number of keys waiting
 
 ; ---- the panel ----
-PV_W              = PREV_W*8      ; 128 pixels wide
-PV_H              = LIST_ROWS*8   ; 336 pixels high
-PV_TILES          = PREV_W*LIST_ROWS ; 672 tiles
-PV_MSG_ROW        = LIST_TOP+LIST_ROWS-1 ; messages: bottom row
+PV_W              = PREV_W*8      ; 320 pixels wide
+PV_H              = PREV_ROWS*8   ; 240 pixels high
+PV_TILES_X        = PREV_W/2      ; 20 tiles of 16x16 across
+PV_TILES_Y        = PREV_ROWS/2   ; 15 tiles down
+PV_TILES          = PV_TILES_X*PV_TILES_Y ; 300 tiles
+PV_MSG_ROW        = PREV_TOP+PREV_ROWS-1 ; messages: bottom row
 PV_BG             = $0F           ; background: palette entry F (grey)
 PV_FIRST_COL      = 17            ; palette entries for the picture
 PV_END_COL        = 128           ;   (17-127)
@@ -111,12 +124,27 @@ COL_PV_TEXT       = $0C           ; message: black, see-through behind
 ; ---- VRAM (see also LOGO_VRAM, the mouse pointer at $13000, the
 ;      text screen at $1B000 and the character set at $1F000) ----
 TILE_VRAM         = $00000        ; tile 0, then the panel's tiles
-                                  ;   (673*64 bytes, up to $0A840)
-MAP_VRAM          = $14000        ; layer 0 map, 128x64 cells x 2
-                                  ;   bytes = 16 KB, up to $17FFF
+                                  ;   (301*256 bytes, up to $12CFF)
+MAP_VRAM          = $14000        ; layer 0 map, 64x32 cells x 2
+                                  ;   bytes = 4 KB, up to $14FFF
+                                  ;   (64x32 tiles of 16 pixels
+                                  ;   cover more than the screen)
 
+; scroll layer 0 by 8 pixels if the panel starts on an odd text
+; column or row, so that it starts on a tile's edge; then the map
+; cell at its top left corner is:
+PV_HSCROLL        = (PREV_X .mod 2) * 8
+PV_VSCROLL        = (PREV_TOP .mod 2) * 8
+PV_MAP_COL        = (PREV_X*8 + PV_HSCROLL) / 16
+PV_MAP_ROW        = (PREV_TOP*8 + PV_VSCROLL) / 16
+
+.assert (PREV_W .mod 2) = 0 && (PREV_ROWS .mod 2) = 0, error, "the panel must be whole 16x16 tiles"
 .assert PV_TILES < 1024, error, "too many preview tiles"
-.assert TILE_VRAM + (PV_TILES+1)*64 <= LOGO_VRAM, error, "preview tiles overlap the logo"
+.assert PV_H <= 256, error, "emit_row expects the panel to be at most 256 pixels high"
+.assert PV_W > 256 && PV_W <= 256+128, error, "emit_row's fill expects 257-384 pixels across"
+.assert TILE_VRAM = 0, error, "emit_row expects the tiles at VRAM 0"
+.assert TILE_VRAM + (PV_TILES+1)*256 <= $13000, error, "preview tiles overlap the mouse pointer"
+.assert LOGO_VRAM >= MAP_VRAM + $1000, error, "the logo overlaps the preview map"
 
 ; ---- banked RAM ----
 WIN_BANK          = 6             ; banks 6-9: the 32 KB window
@@ -165,6 +193,8 @@ h_sh:     .res 2
 f_src:    .res 2                  ; next window byte to unfilter
 l_ptr:    .res 2                  ; general pointer
 s_ptr:    .res 2                  ; general pointer
+c_ptr:    .res 2                  ; entry in col_tab
+o_ptr:    .res 2                  ; next pixel in pv_line
 bitbuf:   .res 1                  ; bits not yet used (see getbit)
 .popseg
 
@@ -174,6 +204,8 @@ pv_want:    .res 1                ; file record to show ($FF = none)
 pv_timer:   .res 1                ; frames until decoding starts
 pv_i:       .res 1
 pv_namelen: .res 1
+pv_mask:    .res 1                ; flags pv_is looks for
+pv_cnt:     .res 2                ; tiles left for pv_clear_tiles
 
 png_sp:     .res 1                ; stack pointer, for png_return
 in_left:    .res 2                ; bytes left in inbuf
@@ -199,6 +231,7 @@ fetch_vec:  .res 2                ; routine that reads one pixel
 out_w:      .res 2                ; size of the picture on screen
 out_h:      .res 2
 x_off:      .res 1                ; where it starts in the panel
+ox:         .res 2                ; output column counter
 oy:         .res 2                ; next output row
 sy:         .res 2                ; source row being decoded
 nsy:        .res 2                ; source row the next output row
@@ -284,9 +317,10 @@ offs_lo:    .res 16               ; construct workspace
 offs_hi:    .res 16
 lengths:    .res 320              ; code lengths for construct
 
-col_lo:     .res PV_W             ; for each output column: byte
-col_hi:     .res PV_W             ;   offset of its source pixel in
-col_sh:     .res PV_W             ;   the row, and bit shift
+col_tab:    .res PV_W*3           ; for each output column, 3 bytes:
+                                  ;   the byte offset (low, high) of
+                                  ;   its source pixel in the row,
+                                  ;   and the bit shift (depths 1-4)
 pv_line:    .res PV_W             ; one output row of the panel
 inbuf:      .res 512              ; bytes read from the file
 rowbuf0:    .res 8+ROW_MAX        ; the two rows. The 8 bytes in
@@ -305,7 +339,7 @@ rowbuf1:    .res 8+ROW_MAX        ;   front are always 0, so the
 preview_init:
    ; the map: all tile 0 ...
    VERA_SET_ADDR MAP_VRAM, 1
-   ldy #64                        ; 64 pages of 256 bytes = 16 KB
+   ldy #16                        ; 16 pages of 256 bytes = 4 KB
    ldx #0
 :  stz VERA_data0
    inx
@@ -313,23 +347,25 @@ preview_init:
    dey
    bne :-
 
-   ; ... except the panel's cells: tile 1 + row*16 + column
-   ; (2 bytes per cell: tile number low byte, then bits 8-9)
+   ; ... except the panel's cells: tile 1 + row*20 + column
+   ; (2 bytes per cell: tile number low byte, then bits 8-9).
+   ; A map row is 64 cells = 128 bytes.
    lda #1
    sta tmp                        ; tmp/tmp+1 = tile number
    stz tmp+1
-   ldy #LIST_TOP                  ; Y = screen row
+   lda #<(MAP_VRAM + PV_MAP_ROW*128 + PV_MAP_COL*2)
+   sta tmp+2                      ; tmp+2/tmp+3 = VRAM address of
+   lda #>(MAP_VRAM + PV_MAP_ROW*128 + PV_MAP_COL*2)
+   sta tmp+3                      ;   the row's first panel cell
+   ldy #PV_TILES_Y                ; Y = rows still to do
 @maprow:
-   ; address of cell (PREV_X, Y) = MAP_VRAM + Y*256 + PREV_X*2
-   lda #PREV_X*2
+   lda tmp+2
    sta VERA_addr_low
-   tya
-   clc
-   adc #>MAP_VRAM
+   lda tmp+3
    sta VERA_addr_high
    lda #$10 | ^MAP_VRAM           ; increment 1
    sta VERA_addr_bank
-   ldx #PREV_W
+   ldx #PV_TILES_X
 :  lda tmp
    sta VERA_data0
    lda tmp+1
@@ -339,28 +375,35 @@ preview_init:
    inc tmp+1
 :  dex
    bne :--
-   iny
-   cpy #LIST_TOP+LIST_ROWS
+   lda tmp+2                      ; next map row: 128 bytes on
+   clc
+   adc #128
+   sta tmp+2
+   bcc :+
+   inc tmp+3
+:  dey
    bne @maprow
 
-   ; tile 0: 64 see-through pixels
+   ; tile 0: 256 see-through pixels
    VERA_SET_ADDR TILE_VRAM, 1
-   ldx #64
+   ldx #0
 :  stz VERA_data0
-   dex
+   inx
    bne :-
    jsr pv_clear_tiles             ; the panel's tiles: grey
 
-   ; layer 0: map 64 high (1) x 128 wide (2), tiles, 8 bits/pixel (3)
-   lda #(1 << 6) | (2 << 4) | 3
+   ; layer 0: map 32 high (0) x 64 wide (1), tiles, 8 bits/pixel (3)
+   lda #(0 << 6) | (1 << 4) | 3
    sta VERA_L0_config
    lda #<(MAP_VRAM >> 9)
    sta VERA_L0_mapbase
-   lda #<((TILE_VRAM >> 11) << 2) ; 8x8 tiles
+   lda #<((TILE_VRAM >> 11) << 2) | 3 ; bits 0-1: 16x16 tiles
    sta VERA_L0_tilebase
-   stz VERA_L0_hscroll_l
+   lda #PV_HSCROLL                ; line the tiles up with the panel
+   sta VERA_L0_hscroll_l
    stz VERA_L0_hscroll_h
-   stz VERA_L0_vscroll_l
+   lda #PV_VSCROLL
+   sta VERA_L0_vscroll_l
    stz VERA_L0_vscroll_h
    lda VERA_dc_video
    ora #$10                       ; bit 4: layer 0 on
@@ -383,17 +426,30 @@ preview_off:
 ;------------------------------------------------------------------
 ; pv_clear_tiles - fill all the panel's tiles with the background
 ;------------------------------------------------------------------
+; (300 tiles of 256 bytes: 75 KB. Each pass of the inner loop
+; writes 4 bytes, which saves time on the loop's own instructions.)
 pv_clear_tiles:
-   VERA_SET_ADDR (TILE_VRAM + 64), 1
-   ldy #>(PV_TILES*64)            ; 168 pages of 256 bytes
-   .assert <(PV_TILES*64) = 0, error, "tile area must be whole pages"
+   VERA_SET_ADDR (TILE_VRAM + 256), 1
+   lda #<PV_TILES                 ; pv_cnt = tiles still to clear
+   sta pv_cnt
+   lda #>PV_TILES
+   sta pv_cnt+1
    lda #PV_BG
-   ldx #0
+@tile:
+   ldx #64                        ; 64 x 4 = 256 bytes = one tile
 :  sta VERA_data0
-   inx
+   sta VERA_data0
+   sta VERA_data0
+   sta VERA_data0
+   dex
    bne :-
-   dey
-   bne :-
+   ldx pv_cnt                     ; count down the 16-bit pv_cnt
+   bne :+
+   dec pv_cnt+1
+:  dec pv_cnt
+   bne @tile
+   ldx pv_cnt+1
+   bne @tile
    rts
 
 ;------------------------------------------------------------------
@@ -426,6 +482,7 @@ preview_update:
    cmp pv_want
    beq @done                      ; no change
    sta pv_want
+   jsr pv_clear_text              ; (if a text file was shown)
    jsr pv_clear_tiles
    ldx #0
    jsr preview_message            ; clear any message
@@ -441,13 +498,15 @@ preview_update:
 ;------------------------------------------------------------------
 ; pv_find - which file should be previewed?
 ; Out: A = its record number, or $FF if none.
-; The highlighted file if it is a PNG, else the first PNG listed.
+; The highlighted file if it is a PNG or a text file (TEXT.ASM),
+; else the first PNG listed.
 ;------------------------------------------------------------------
 pv_find:
    lda file_sel
    cmp #$FF
    beq @first
-   jsr pv_is_png
+   ldx #FLAG_PNG | FLAG_TXT
+   jsr pv_is
    bcs @done
 @first:
    stz pv_i
@@ -455,7 +514,8 @@ pv_find:
    lda pv_i
    cmp file_count
    beq @none
-   jsr pv_is_png
+   ldx #FLAG_PNG
+   jsr pv_is
    bcs @done
    inc pv_i
    bra @loop
@@ -464,9 +524,11 @@ pv_find:
 @done:
    rts
 
-; pv_is_png - is file A (position in the sorted list) a PNG?
-; Out: C = 1 and A = its record number if it is
-pv_is_png:
+; pv_is - does file A (position in the sorted list) have any of
+; the flags in X (FLAG_PNG, FLAG_TXT)?
+; Out: C = 1 and A = its record number if it does
+pv_is:
+   stx pv_mask
    tax
    lda file_order,x
    pha
@@ -474,8 +536,8 @@ pv_is_png:
    ldy #REC_FLAGS
    lda (ptr),y
    stz RAM_BANK
-   and #FLAG_PNG
-   cmp #1                         ; C = 1 if the flag was set
+   and pv_mask
+   cmp #1                         ; C = 1 if a flag was set
    pla
    rts
 
@@ -500,6 +562,11 @@ preview_tick:
    bra :-
 :  stx pv_namelen
 
+   lda recbuf+REC_FLAGS           ; a text file? (see TEXT.ASM)
+   and #FLAG_TXT
+   beq :+
+   jmp text_show
+:
    jsr pv_clear_tiles             ; (rows left by an interrupted try)
    lda #<str_pv_loading
    ldx #>str_pv_loading
@@ -1198,10 +1265,16 @@ setup_picture:
    bne :+
    inc out_h
 :  ; centre it across the panel: x_off = (PV_W - out_w) / 2
-   lda #PV_W
+   ; (a 16-bit subtraction; halved, the answer fits in a byte)
+   lda #<PV_W
    sec
    sbc out_w
-   lsr
+   sta tmp
+   lda #>PV_W
+   sbc out_w+1
+   lsr                            ; the high byte's bit 0 goes into
+   lda tmp                        ;   the carry, and ROR brings it
+   ror                            ;   into the top of the low byte
    sta x_off
 
    ; ---- which source column each output column comes from ----
@@ -1213,7 +1286,12 @@ setup_picture:
    ldx img_w+1
    ldy #0                         ; 0 = columns
    jsr dda_setup
-   stz tmp+3                      ; tmp+3 = ox
+   lda #<col_tab                  ; c_ptr = the first column's entry
+   sta c_ptr
+   lda #>col_tab
+   sta c_ptr+1
+   stz ox                         ; ox = output column (16-bit)
+   stz ox+1
 @col:
    ; byte offset and shift of source column nsy (used for columns
    ; here) in a row
@@ -1229,12 +1307,15 @@ setup_picture:
    sta m_b
    stz m_b+1
    jsr mul16
-   ldx tmp+3
+   ldy #0
    lda m32
-   sta col_lo,x
+   sta (c_ptr),y                  ; offset low
+   iny
    lda m32+1
-   sta col_hi,x
-   stz col_sh,x
+   sta (c_ptr),y                  ; offset high
+   iny
+   lda #0
+   sta (c_ptr),y                  ; no shift
    bra @col_next
 @lowbits:
    ; 1, 2 or 4 bits: bit position = sx * depth; offset = that / 8;
@@ -1252,8 +1333,7 @@ setup_picture:
    rol m32+1
    rol m32+2
    bra :-
-:  ldx tmp+3
-   lda m32
+:  lda m32
    and #7
    sta tmp
    lda #8
@@ -1261,24 +1341,40 @@ setup_picture:
    sbc depth
    sec
    sbc tmp
-   sta col_sh,x
+   sta tmp+1                      ; tmp+1 = the shift
    ldy #3
 :  lsr m32+2
    ror m32+1
    ror m32
    dey
    bne :-
+   ldy #0
    lda m32
-   sta col_lo,x
+   sta (c_ptr),y                  ; offset low
+   iny
    lda m32+1
-   sta col_hi,x
+   sta (c_ptr),y                  ; offset high
+   iny
+   lda tmp+1
+   sta (c_ptr),y                  ; shift
 @col_next:
    jsr dda_step
-   inc tmp+3
-   lda tmp+3
+   lda c_ptr                      ; next entry: 3 bytes on
+   clc
+   adc #3
+   sta c_ptr
+   bcc :+
+   inc c_ptr+1
+:  inc ox                         ; next column; stop at out_w
+   bne :+
+   inc ox+1
+:  lda ox
    cmp out_w
-   beq :+
-   jmp @col
+   bne :+
+   lda ox+1
+   cmp out_w+1
+   beq :++
+:  jmp @col
 :
    ; ---- the same for rows, worked out as the rows arrive ----
    lda img_h
@@ -1946,81 +2042,120 @@ row_done:
 ;------------------------------------------------------------------
 emit_row:
    ; the panel row: background, with the picture's pixels in the
-   ; middle
-   ldx #PV_W-1
+   ; middle. It is more than 256 bytes, so fill it in two parts.
    lda #PV_BG
-:  sta pv_line,x
+   ldx #0
+:  sta pv_line,x                  ; bytes 0-255
+   inx
+   bne :-
+   ldx #PV_W-256-1
+:  sta pv_line+256,x              ; and the rest
    dex
    bpl :-
-   stz tmp+3                      ; tmp+3 = ox
-@pixel:
-   ldx tmp+3
-   lda row_cur                    ; f_ptr = the source pixel
+
+   lda #<col_tab                  ; c_ptr = column 0's entry
+   sta c_ptr
+   lda #>col_tab
+   sta c_ptr+1
+   lda #<pv_line                  ; o_ptr = pv_line + x_off
    clc
-   adc col_lo,x
+   adc x_off
+   sta o_ptr
+   lda #>pv_line
+   adc #0
+   sta o_ptr+1
+   lda out_w                      ; ox = pixels still to do
+   sta ox
+   lda out_w+1
+   sta ox+1
+@pixel:
+   ldy #0                         ; f_ptr = row_cur + the column's
+   lda (c_ptr),y                  ;   byte offset
+   clc
+   adc row_cur
    sta f_ptr
-   lda row_cur+1
-   adc col_hi,x
+   iny
+   lda (c_ptr),y
+   adc row_cur+1
    sta f_ptr+1
-   lda col_sh,x
+   iny
+   lda (c_ptr),y                  ; and its bit shift
    sta cur_sh
    jsr fetch                      ; pr, pg, pb, pa
    jsr map_colour                 ; A = palette entry
-   pha
-   lda tmp+3
+   sta (o_ptr)                    ; (65C02: (zp) without Y)
+   inc o_ptr
+   bne :+
+   inc o_ptr+1
+:  lda c_ptr                      ; next column's entry
    clc
-   adc x_off
-   tax
-   pla
-   sta pv_line,x
-   inc tmp+3
-   lda tmp+3
-   cmp out_w
+   adc #3
+   sta c_ptr
+   bcc :+
+   inc c_ptr+1
+:  lda ox                         ; count down the 16-bit ox
+   bne :+
+   dec ox+1
+:  dec ox
+   bne @pixel
+   lda ox+1
    bne @pixel
 
-   ; Write it into the tiles. Panel row y is line y mod 8 of tile
-   ; row y/8; the 16 tiles across are 64 bytes apart, starting at
-   ; TILE_VRAM + 64 (tile 1) + (y/8)*16*64 + (y mod 8)*8.
+   ; Write it into the tiles. Panel row y is line y mod 16 of tile
+   ; row y/16 (tiles 1 + (y/16)*20 onwards): 16 bytes at byte
+   ; (y mod 16)*16 of each of the 20 tiles across. With 256-byte
+   ; tiles at VRAM 0, the VRAM address is simply: bank:high = the
+   ; tile number, low = (y mod 16)*16.
    lda oy
-   and #7
+   and #15
    asl
    asl
    asl
-   ora #64
-   sta tmp                        ; tmp/tmp+1 = VRAM address
-   lda oy+1                       ; (y/8)*1024: high byte = (y/8)*4
-   sta tmp+1
-   lda oy
-   lsr tmp+1
-   ror
-   lsr tmp+1
-   ror
-   lsr tmp+1
-   ror                            ; A = y/8 (y < 336)
    asl
-   asl
-   sta tmp+1
-   ldx #0                         ; X = position in pv_line
+   sta tmp                        ; tmp = (y mod 16)*16
+   lda oy                         ; (y < 240, so oy+1 is 0)
+   lsr
+   lsr
+   lsr
+   lsr                            ; A = y/16
+   ldx #PV_TILES_X
+   jsr mul8                       ; mul_hi:mul_lo = (y/16)*20
+   lda mul_lo                     ; + 1 (tile 0 is the see-through
+   clc                            ;   one)
+   adc #1
+   sta tmp+1                      ; tmp+1/tmp+2 = tile number
+   lda mul_hi
+   adc #0
+   sta tmp+2
+   lda #<pv_line                  ; s_ptr = the tile's 16 pixels
+   sta s_ptr
+   lda #>pv_line
+   sta s_ptr+1
+   ldx #PV_TILES_X                ; X = tiles still to do
 @tile:
    lda tmp
    sta VERA_addr_low
    lda tmp+1
    sta VERA_addr_high
-   lda #$10 | ^TILE_VRAM          ; increment 1
+   lda tmp+2                      ; (tile 256 onwards: VRAM bank 1)
+   ora #$10                       ; increment 1
    sta VERA_addr_bank
-   ldy #8
-:  lda pv_line,x
+   ldy #0
+:  lda (s_ptr),y
    sta VERA_data0
-   inx
-   dey
+   iny
+   cpy #16
    bne :-
-   lda tmp                        ; next tile: 64 bytes on
+   lda s_ptr                      ; next 16 pixels
    clc
-   adc #64
-   sta tmp
+   adc #16
+   sta s_ptr
    bcc :+
-   inc tmp+1
-:  cpx #PV_W
+   inc s_ptr+1
+:  inc tmp+1                      ; next tile across
+   bne :+
+   inc tmp+2
+:  dex
    bne @tile
    rts
 

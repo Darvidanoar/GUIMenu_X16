@@ -10,13 +10,18 @@
 ;  +----------------------------------------------------------+
 ;  |[o]| SD Card Program Launcher                   |[=]|[#]| <- blue
 ;  |----------------------------------------------------------|  title
-;  |  Folders:              Files:                 Preview:   |  bar
-;  |  +---------------+-+   +---------------+-+   +---------+ |
-;  |  |[-] SD Card    |#|   | HELLO.PRG     | |   |         | |
-;  |  | [+] GAMES     | |   | readme.txt    |#|   |         | |
-;  |  | [+] TOOLS     |^|   |               |^|   |         | |
-;  |  |               |v|   |               |v|   |         | |
-;  |  +---------------+-+   +---------------+-+   +---------+ |
+;  |  Folders:              Files:                            |  bar
+;  |  +---------------+-+   +-----------------------------+-+ |
+;  |  |[-] SD Card    |#|   | HELLO.PRG                   |#| |
+;  |  | [+] GAMES     | |   | readme.txt                  |^| |
+;  |  | [+] TOOLS     | |   +-----------------------------+v+ |
+;  |  |               | |     Preview:                        |
+;  |  |               | |   +-------------------------------+ |
+;  |  |               | |   |                               | |
+;  |  |               | |   |   320x240 pixels: half the    | |
+;  |  |               |^|   |   screen each way             | |
+;  |  |               |v|   |                               | |
+;  |  +---------------+-+   +-------------------------------+ |
 ;  |  /GAMES                    Double-click a program ...     |
 ;  +----------------------------------------------------------+
 ;
@@ -25,15 +30,19 @@
 ; right makes a thing look raised (the window); the other way round
 ; makes it look sunken (the list boxes).
 ;
-;   - Left list:   a tree of the folders on the SD card.
+;   - Left list:   a tree of the folders on the SD card (tall and
+;                  the full height of the window).
 ;                  Click a folder name to open it.
 ;                  Click its [+]/[-] box to expand or collapse it.
-;   - Middle list: the files in the open folder. Programs (.PRG)
-;                  are listed first, in blue. Double-click one to
-;                  run it.
-;   - Right panel: a preview of the folder's picture: the
-;                  highlighted .PNG file, or else the first .PNG
-;                  in the folder, shrunk to fit (see PNG.ASM).
+;   - Top right:   the files in the open folder: programs (.PRG,
+;                  in blue) first, then pictures (.PNG), then
+;                  text (.TXT, .MD), then the rest, each group in
+;                  name order. Double-click a program to run it.
+;   - Bottom right: a 320x240 pixel preview of the folder's
+;                  picture: the highlighted .PNG file, or else the
+;                  first .PNG in the folder, shrunk to fit (see
+;                  PNG.ASM). A highlighted .TXT or .MD file shows
+;                  its text there instead (see TEXT.ASM).
 ;   - Scroll bars: as on the Amiga, both arrows are at the bottom.
 ;                  Click the arrows to scroll a line (hold to
 ;                  repeat), click the track above/below the thumb
@@ -41,13 +50,16 @@
 ;                  wheel scrolls the list under the pointer.
 ;   - The window's close, zoom and depth gadgets are only
 ;     decoration.
-;   - Keyboard: Tab switches between the folder and file lists
-;     (the one with the blue highlight bar has the "focus"). Up,
+;   - Keyboard: Tab moves between the folder list, the file list
+;     and (when a text file is shown) the text preview; Shift+Tab
+;     goes back. The one that has the "focus" has the blue
+;     highlight bar (with the text, neither list has it). Up,
 ;     Down, Page Up, Page Down, Home and End move through it;
 ;     moving in the folder list opens that folder (without
-;     expanding it). Right expands the open folder and opens its
-;     first sub-folder, and Left opens its parent,
-;     whichever list has the focus. RETURN on a program runs it.
+;     expanding it), and in the text they scroll it. Right expands
+;     the open folder and opens its first sub-folder, and Left
+;     opens its parent, wherever the focus is. RETURN on a program
+;     runs it.
 ;   - Q, ESC or RUN/STOP quits back to BASIC.
 ;
 ; Source files (all assembled together as one unit, see the
@@ -60,6 +72,7 @@
 ;   DOS.ASM      sending DOS commands and reading directory listings
 ;   LAUNCH.ASM   loading and running the chosen program
 ;   PNG.ASM      the preview panel: decoding and showing PNG files
+;   TEXT.ASM     the preview panel: showing .TXT and .MD files
 ;
 ; Build:  make
 ;         (runs: cl65 -t cx16 -C cx16-asm.cfg -u __EXEHDR__ ...)
@@ -86,7 +99,8 @@ KBDBUF_PUT        := $FEC3
 ;
 ;   byte 0     REC_DEPTH  tree nodes: how deep the folder is (root=0)
 ;   byte 1     REC_FLAGS  tree nodes: FLAG_EXPANDED / FLAG_NOKIDS
-;                         files:      FLAG_PRG
+;                         files:      FLAG_PRG / FLAG_PNG /
+;                                     FLAG_TXT
 ;   bytes 2-63 REC_NAME   the name, ending with a 0 byte
 ;------------------------------------------------------------------
 TREE_BANK         = 1             ; banks 1-2 : folder tree nodes
@@ -113,6 +127,7 @@ FLAG_EXPANDED     = $01           ; tree node's sub-folders are shown
 FLAG_NOKIDS       = $02           ; tree node has no sub-folders
 FLAG_PRG          = $01           ; file name ends in .PRG
 FLAG_PNG          = $02           ; file name ends in .PNG
+FLAG_TXT          = $04           ; file name ends in .TXT or .MD
 
 ;------------------------------------------------------------------
 ; Screen layout (80 columns x 60 rows text mode)
@@ -130,9 +145,10 @@ LOGO_X            = 16            ; top left corner, in pixels
 LOGO_Y            = 8
 LOGO_SPRITES      = 5             ; sprites 1-5 (sprite 0 is the mouse)
 LOGO_SPR_BYTES    = 64*64         ; 64x64 pixels, 1 byte per pixel
-LOGO_VRAM         = $0B000        ; where the sprite pixels go in VRAM
-                                  ;   ($0B000-$0FFFF; below it are the
-                                  ;   preview's tiles, see PNG.ASM)
+LOGO_VRAM         = $15000        ; where the sprite pixels go in VRAM
+                                  ;   ($15000-$19FFF; the preview's
+                                  ;   tiles fill $00000-$12CFF and its
+                                  ;   map $14000-$14FFF, see PNG.ASM)
 LOGO_PAL_FIRST    = 128           ; logo colours: palette entries 128-255
 
 ; the window. Its raised outer edge is drawn on the desktop cells
@@ -142,51 +158,86 @@ WIN_L             = 1             ; left border column
 WIN_R             = 78            ; right border column
 WIN_T             = 9             ; top row = the title bar
 WIN_B             = 58            ; bottom border row
-LABEL_ROW         = 11            ; "Folders:" "Files:" "Preview:"
-BOX_T             = 12            ; top edge of the list boxes
-LIST_TOP          = 13            ; first row of the lists
-LIST_ROWS         = 42            ; rows 13..54 show list items
-BOX_B             = 55            ; bottom edge of the list boxes
+; The boxes inside the window:
+;
+;   +--------------------------------+ +----------------+
+;   | Folders (tall, on the left)    | | Files          |
+;   |                                | |                |
+;   |                                | +----------------+
+;   |                                |   Preview:
+;   |                                | +----------------+
+;   |                                | | 320x240 pixels |
+;   |                                | |                |
+;   +--------------------------------+ +----------------+
+;
+; Both lists start on row LIST_TOP, but they are different heights,
+; so each has its own number of rows (TREE_ROWS, FILE_ROWS). A box's
+; edge is drawn in the row above and the row below its contents.
+LABEL_ROW         = 11            ; "Folders:" "Files:"
+BOX_T             = 12            ; top edge of the two list boxes
+LIST_TOP          = 13            ; first row of both lists
+TREE_ROWS         = 42            ; folders: rows 13..54
+TREE_BOX_B        = LIST_TOP+TREE_ROWS ; row 55: bottom edge
+FILE_ROWS         = 9             ; files: rows 13..21
+FILE_BOX_B        = LIST_TOP+FILE_ROWS ; row 22: bottom edge
+
+; The preview: 40 x 30 character cells = 320 x 240 screen pixels,
+; half the screen each way, at the bottom right, its bottom edge
+; level with the folder box's. A 640x480 screenshot shows at half
+; size, a 320x240 one pixel for pixel.
+PREV_ROWS         = 30            ; picture: rows 25..54
+PREV_TOP          = TREE_BOX_B-PREV_ROWS ; row 25
+PREV_BOX_T        = PREV_TOP-1    ; row 24: top edge
+PREV_LABEL_ROW    = PREV_BOX_T-1  ; row 23: "Preview:"
 STATUS_ROW        = 57            ; status line (path and hint)
 STATUS_X          = 3             ; where the path starts
 
 .assert WIN_L >= 1 && WIN_R <= 78 && WIN_T >= 1 && WIN_B <= 58, error, "window must leave room for its outer edge"
-.assert BOX_B = LIST_TOP + LIST_ROWS, error, "list box bottom must be just below the list"
+.assert PREV_LABEL_ROW > FILE_BOX_B, error, "the preview must fit below the file list"
+.assert TREE_BOX_B < STATUS_ROW, error, "the boxes must end above the status line"
 
-; the three boxes: _L/_R = left/right edge column, _X/_W = the
-; columns for text, _SB = the scroll bar column
+; the boxes: _L/_R = left/right edge column, _X/_W = the columns
+; for text, _SB = the scroll bar column. The file list sits right
+; above the preview and is the same width.
 TREE_L            = 3
-TREE_X            = 4             ; folder names: columns 4..27
-TREE_W            = 24
-TREE_SB           = 28
-TREE_R            = 29
-FILE_L            = 31
-FILE_X            = 32            ; file names: columns 32..55
-FILE_W            = 24
-FILE_SB           = 56
-FILE_R            = 57
-PREV_L            = 59
-PREV_X            = 60            ; preview: columns 60..75
-PREV_W            = 16
+TREE_X            = 4             ; folder names: columns 4..31
+TREE_W            = 28
+TREE_SB           = 32
+TREE_R            = 33
+PREV_L            = 35
+PREV_X            = 36            ; preview: columns 36..75
+PREV_W            = 40
 PREV_R            = 76
+FILE_L            = PREV_L
+FILE_X            = PREV_X        ; file names: columns 36..74
+FILE_W            = PREV_W-1      ;   (the last column is the
+FILE_SB           = PREV_X+FILE_W ;   scroll bar, column 75)
+FILE_R            = PREV_R
+
+.assert TREE_X+TREE_W = TREE_SB && TREE_SB+1 = TREE_R, error, "tree columns out of order"
+.assert TREE_R < PREV_L, error, "the folder box must end left of the preview"
 
 ; scroll bar, Amiga style: the track (where the thumb slides) from
-; the first list row down, then the up and down arrows together at
-; the bottom
-TRACK_TOP         = LIST_TOP
-TRACK_ROWS        = LIST_ROWS-2
-SB_UP_ROW         = LIST_TOP+LIST_ROWS-2
-SB_DOWN_ROW       = LIST_TOP+LIST_ROWS-1
+; the first row down, then the up and down arrows together at the
+; bottom. The bars are different heights, so the rows of the arrows
+; and the length of the track are worked out when needed (sb_load).
 
 SCROLL_STEP       = 3             ; lines per mouse wheel notch
-PAGE_STEP         = LIST_ROWS-1   ; lines per click on the track
+                                  ; a page (Page Up/Down, or a click
+                                  ;   on the track) is the list's
+                                  ;   height less one line
 DBLCLICK_TIME     = 30            ; two clicks within 30 jiffies (half a
                                   ; second) count as a double-click
 REPEAT_DELAY      = 20            ; frames before a held click repeats
 REPEAT_RATE       = 3             ; frames between repeats
 
-FOCUS_TREE        = 0             ; which list the keyboard moves in
-FOCUS_FILES       = 1             ;   (see the "focus" variable)
+FOCUS_TREE        = 0             ; what the keyboard moves in (see
+FOCUS_FILES       = 1             ;   the "focus" variable): a list,
+FOCUS_TEXT        = 2             ;   or the text in the preview
+
+BAR_TREE          = 1             ; the scroll bars (see hold_bar and
+BAR_FILES         = 2             ;   sb_load)
+BAR_TEXT          = 3
 
 ; Key codes returned by GETIN (PETSCII, plus the X16's extra keys)
 KEY_RUNSTOP       = $03
@@ -230,7 +281,10 @@ COL_FRAME         = $FC           ; scroll bars: black on grey
 COL_TITLE         = $9C           ; title bar: black on Amiga blue
 COL_LABEL         = $FC           ; black on grey
 COL_LIST          = $FC           ; list rows: black on grey
-COL_FILE          = $FC           ; ordinary file: black on grey
+COL_FILE          = $FC           ; picture or text file (they can be
+                                  ;   previewed): black on grey
+COL_OTHER         = $FB           ; any other file (nothing to do
+                                  ;   with it): dark grey on grey
 COL_PRG           = $F6           ; program: medium-dark blue on grey
 COL_SEL           = $9C           ; selected item: black on blue
 COL_SEL_PRG       = $91           ; selected program: white on blue
@@ -280,8 +334,19 @@ CH_SB_TRACK       = CH_E_L        ; empty track: just a line down the
 CH_FOLDER         = $91           ; folder icon
 CH_PLUS           = $92           ; [+] box
 CH_MINUS          = $93           ; [-] box
+; ASCII characters that the PETSCII character set doesn't have (it
+; has a pound sign and arrows in their places), needed for text
+; files and file names
+CH_BSLASH         = $94           ; \
+CH_CARET          = $95           ; ^
+CH_USCORE         = $96           ; _
+CH_BTICK          = $97           ; `
+CH_LBRACE         = $98           ; {
+CH_VBAR           = $99           ; |
+CH_RBRACE         = $9A           ; }
+CH_TILDE          = $9B           ; ~
 
-GLYPH_COUNT       = $94 - GLYPH_BASE ; number of custom characters
+GLYPH_COUNT       = $9C - GLYPH_BASE ; number of custom characters
 
 ;------------------------------------------------------------------
 ; Zero page variables. Only zero page locations can be used as
@@ -322,12 +387,22 @@ last_click_idx:   .res 1          ; file clicked last time ($FF = none)
 last_click_time:  .res 1          ; clock value at that click
 
 hold_bar:         .res 1          ; scroll bar being held: 0 = none,
-                                  ;   1 = tree, 2 = files
+                                  ;   or BAR_TREE/BAR_FILES/BAR_TEXT
 hold_drag:        .res 1          ; not 0 while dragging the thumb
 hold_timer:       .res 1          ; frames until the next repeat
 sb_first:         .res 1          ; not 0 for the first click of a hold
-sb_count:         .res 1          ; items in the list (scroll bar maths)
-sb_scroll:        .res 1          ; its scroll position
+; scroll bar maths (see sb_load). Counts and positions are 16-bit
+; because a text file can have more than 255 lines.
+sb_bar:           .res 1          ; which bar sb_load loaded
+sb_count:         .res 2          ; lines in its list
+sb_scroll:        .res 2          ; its scroll position (top line)
+sb_new:           .res 2          ; a new scroll position
+sb_max:           .res 2          ; the largest scroll position
+sb_rows:          .res 1          ; rows the list shows
+sb_top:           .res 1          ; screen row of its first line
+sb_track:         .res 1          ; rows in its scroll bar's track
+sb_up_row:        .res 1          ; screen rows of its scroll bar's
+sb_down_row:      .res 1          ;   up and down arrows
 mul_a:            .res 1          ; multiply / divide workspace
 mul_b:            .res 1
 mul_lo:           .res 1
@@ -335,11 +410,13 @@ mul_hi:           .res 1
 div_d:            .res 1
 
 dir_error:        .res 1          ; not 0 if the folder couldn't be read
-focus:            .res 1          ; FOCUS_TREE or FOCUS_FILES
+focus:            .res 1          ; FOCUS_TREE, FOCUS_FILES or
+                                  ;   FOCUS_TEXT
 key_delta:        .res 1          ; how far a key moves the selection
 
 file_order:       .res MAX_FILES  ; record numbers of the files, in
-                                  ;   sorted order (programs first)
+                                  ;   sorted order (in groups, see
+                                  ;   compare_names in TREE.ASM)
 tdir_order:       .res MAX_TDIRS  ; same for the sub-folders
 recbuf:           .res 64         ; a copy of one record in normal RAM
 linebuf:          .res 256        ; one line of a directory listing
@@ -478,32 +555,55 @@ quit:
 ; file_click or sb_click.
 ;------------------------------------------------------------------
 handle_click:
-   ; ignore clicks above or below the lists
+   ; ignore clicks above the lists
    lda click_row
-   cmp #LIST_TOP
-   bcc @done
-   cmp #LIST_TOP+LIST_ROWS
-   bcs @done
    sec
    sbc #LIST_TOP
-   sta tmp                        ; row within the list, 0..41
+   bcc @done
+   sta tmp                        ; row within the list
 
-   ; which column?
+   ; which list? The lists are different heights, so the row is
+   ; checked against the height of the one under the pointer.
    lda click_col
    cmp #TREE_X
    bcc @done                      ; left of the tree
+   cmp #FILE_X
+   bcs @file_col                  ; right of the gap: the file list
+   ldx tmp
+   cpx #TREE_ROWS
+   bcs @done                      ; below the folder list
    cmp #TREE_X+TREE_W
    bcc @tree                      ; on a folder name
    cmp #TREE_SB
    beq @tree_sb                   ; on the tree's scroll bar
-   cmp #FILE_X
-   bcc @done                      ; between the boxes
+   rts                            ; (on the gap between the boxes)
+@file_col:
+   ldx tmp
+   cpx #FILE_ROWS
+   bcs @preview                   ; below the file list
    cmp #FILE_X+FILE_W
    bcc @files                     ; on a file name
    cmp #FILE_SB
    beq @file_sb                   ; on the files' scroll bar
 @done:                            ; anywhere else: nothing to do
    rts
+
+@preview:                         ; on the preview: only text (see
+   ldx pv_text                    ;   TEXT.ASM) reacts to clicks
+   beq @done
+   ldx click_row
+   cpx #PREV_TOP
+   bcc @done                      ; above it ("Preview:" label)
+   cpx #PREV_TOP+PREV_ROWS
+   bcs @done                      ; below it
+   cmp #TXT_SB
+   bcc @text                      ; on the text
+   bne @done                      ; right of it
+   lda #BAR_TEXT                  ; on the text's scroll bar
+   jmp sb_click
+@text:
+   lda #FOCUS_TEXT                ; clicking the text gives it the
+   jmp set_focus                  ;   keyboard focus
 
 @tree:
    ; node number = list row + scroll position (if there is one)
@@ -526,14 +626,13 @@ handle_click:
    jmp file_click
 
 @tree_sb:
-   lda #1
+   lda #BAR_TREE
    jmp sb_click
 @file_sb:
-   lda #2
+   lda #BAR_FILES
    jmp sb_click
 
-;------------------------------------------------------------------
-; handle_wheel - scroll the list under the mouse pointer.
+; handle_wheel - scroll the list (or text) under the mouse pointer.
 ; The wheel value is negative when rolled away from you (scroll up)
 ; and positive when rolled towards you (scroll down).
 ;------------------------------------------------------------------
@@ -545,74 +644,93 @@ handle_wheel:
 :  tya
    ldx click_col
    cpx #TREE_R+1
-   bcc scroll_tree                ; pointer is over the tree
-   cpx #FILE_R+1
-   bcc scroll_files               ; pointer is over the files
+   bcs :+
+   ldx #BAR_TREE                  ; pointer is over the tree
+   bra scroll_bar
+:  cpx #FILE_R+1
+   bcs @done                      ; right of the file list
+   ldx click_row
+   cpx #FILE_BOX_B+1
+   bcs :+
+   ldx #BAR_FILES                 ; pointer is over the files
+   bra scroll_bar
+:  ldx pv_text                    ; over the preview: scroll it if it
+   beq @done                      ;   shows text
+   ldx #BAR_TEXT
+   bra scroll_bar
+@done:
    rts
 
 ;------------------------------------------------------------------
-; scroll_tree / scroll_files - scroll a list by A lines (negative =
-; up), redrawing it if the position changed.
-; set_tree_scroll / set_file_scroll - scroll to position A.
+; scroll_bar - scroll bar X's list by A lines (negative = up),
+; redrawing it if the position changed
 ;------------------------------------------------------------------
-scroll_tree:
-   ldx tree_count
-   ldy tree_scroll
-   jsr calc_scroll
-set_tree_scroll:
-   cmp tree_scroll
-   beq :+                         ; no change: nothing to redraw
-   sta tree_scroll
-   jsr draw_tree
-:  rts
+scroll_bar:
+   pha
+   jsr sb_load
+   pla
+   jsr calc_scroll                ; sb_new = the new position
+   ; fall through
 
-scroll_files:
-   ldx file_count
-   ldy file_scroll
-   jsr calc_scroll
-set_file_scroll:
+;------------------------------------------------------------------
+; sb_apply - scroll the list of bar sb_bar to position sb_new
+; (redrawing it if that is a change)
+;------------------------------------------------------------------
+sb_apply:
+   lda sb_bar
+   cmp #BAR_TREE
+   bne @files
+   lda sb_new
+   cmp tree_scroll
+   beq @same                      ; no change: nothing to redraw
+   sta tree_scroll
+   jmp draw_tree
+@files:
+   cmp #BAR_FILES
+   bne @text
+   lda sb_new
    cmp file_scroll
-   beq :+
+   beq @same
    sta file_scroll
-   jsr draw_files
-:  rts
+   jmp draw_files
+@text:
+   jmp text_set_scroll            ; (see TEXT.ASM)
+@same:
+   rts
 
 ;------------------------------------------------------------------
 ; calc_scroll - work out a new scroll position
-; In:  A = lines to move (signed: $FD = -3)
-;      X = number of items in the list
-;      Y = current scroll position
-; Out: A = new scroll position, kept between 0 and the last position
-;      that still fills the list (count - LIST_ROWS).
+; In:  A = lines to move (signed: $FD = -3), and sb_load done
+; Out: sb_new = sb_scroll + A, kept between 0 and sb_max (the last
+;      position that still fills the list)
 ;------------------------------------------------------------------
 calc_scroll:
-   sty tmp+1
-   stx tmp+2
-   cmp #$80                       ; bit 7 set = negative
-   bcs @neg
-   clc                            ; moving down
-   adc tmp+1
-   bcc @store                     ; no carry: no overflow
-   lda #$FF                       ; went past 255: clamp
-   bra @store
-@neg:
-   clc                            ; moving up: adding a negative number
-   adc tmp+1                      ; carries if the result is still >= 0
-   bcs @store
-   lda #0                         ; went below 0: clamp
-@store:
-   sta tmp+1                      ; wanted position
-
-   ; largest useful position = count - LIST_ROWS (0 if short list)
-   lda tmp+2
-   sec
-   sbc #LIST_ROWS
-   bcs :+
-   lda #0
-:  cmp tmp+1
-   bcc :+                         ; largest < wanted: use largest
-   lda tmp+1                      ; otherwise use wanted
-:  rts
+   ldx #0                         ; X = high byte of the movement:
+   cmp #$80                       ;   0, or $FF if it is negative
+   bcc :+
+   dex
+:  clc
+   adc sb_scroll
+   sta sb_new
+   txa
+   adc sb_scroll+1
+   sta sb_new+1
+   bmi @zero                      ; went below 0
+   lda sb_max                     ; past the largest position?
+   cmp sb_new
+   lda sb_max+1
+   sbc sb_new+1
+   bcs @done                      ; no (sb_max >= sb_new)
+   lda sb_max
+   sta sb_new
+   lda sb_max+1
+   sta sb_new+1
+@done:
+   rts
+@zero:
+   stz sb_new
+   stz sb_new+1
+   rts
 
 ;==================================================================
 ; Keyboard
@@ -621,7 +739,7 @@ calc_scroll:
 ; "focus" (focus = FOCUS_TREE or FOCUS_FILES). Its highlight bar is
 ; blue; the other list's is dark grey.
 ;
-;   Tab, Shift+Tab   switch lists
+;   Tab, Shift+Tab   move between the lists and the text preview
 ;   Up, Down         move the highlight one line
 ;   Page Up/Down     move it a page
 ;   Home, End        move it to the first / last item
@@ -677,17 +795,39 @@ key_codes:
    .byte KEY_RETURN
 key_codes_end:
 key_jumps:
-   .word key_tab, key_tab, key_up, key_down, key_pgup
+   .word key_tab, key_backtab, key_up, key_down, key_pgup
    .word key_pgdn, key_home, key_end, key_left, key_right
    .word key_return
 
 ;------------------------------------------------------------------
-; key_tab - give the focus to the other list
+; key_tab     - move the focus on: folders -> files -> text -> folders
+; key_backtab - Shift+Tab, the other way round
+; The text is skipped unless the preview is showing a text file.
 ;------------------------------------------------------------------
 key_tab:
-   lda focus
-   eor #1                         ; 0 <-> 1
+   ldx focus
+   lda tab_next,x
+   cmp #FOCUS_TEXT
+   bne @go
+   ldx pv_text
+   bne @go
+   lda #FOCUS_TREE                ; no text: on to the folders
+@go:
    jmp set_focus
+
+key_backtab:
+   ldx focus
+   lda tab_prev,x
+   cmp #FOCUS_TEXT
+   bne @go
+   ldx pv_text
+   bne @go
+   lda #FOCUS_FILES               ; no text: back to the files
+@go:
+   jmp set_focus
+
+tab_next: .byte FOCUS_FILES, FOCUS_TEXT, FOCUS_TREE ; by focus
+tab_prev: .byte FOCUS_TEXT, FOCUS_TREE, FOCUS_FILES
 
 ;------------------------------------------------------------------
 ; key_up / key_down / key_pgup / key_pgdn - move by a line or page
@@ -699,19 +839,28 @@ key_down:
    lda #1
    bra move_by
 key_pgup:
-   lda #256-PAGE_STEP             ; minus a page
+   jsr focus_page                 ; A = a page in the focused list
+   eor #$FF                       ; make it negative: -A = (A xor
+   inc a                          ;   $FF) + 1 (two's complement)
    bra move_by
 key_pgdn:
-   lda #PAGE_STEP
+   jsr focus_page
    ; fall through
 
 ;------------------------------------------------------------------
 ; move_by - move the focused list's highlight by A lines (negative
 ; = up), stopping at the first and last items. If no file is
 ; highlighted yet, the top file on screen is highlighted instead.
+; With the focus on the text, it scrolls the text by A lines.
 ;------------------------------------------------------------------
 move_by:
    sta key_delta
+   ldx focus
+   cpx #FOCUS_TEXT
+   bne :+
+   ldx #BAR_TEXT
+   jmp scroll_bar
+:
    jsr focus_info                 ; A = highlighted item, X = count
    cpx #0
    beq @done                      ; empty list
@@ -748,9 +897,26 @@ key_end:
 
 ;------------------------------------------------------------------
 ; move_to - highlight item A of the focused list (or the last item,
-; if A is past the end), scrolling to keep it on screen.
+; if A is past the end), scrolling to keep it on screen. With the
+; focus on the text, A = 0 scrolls to the top and $FF to the end.
 ;------------------------------------------------------------------
 move_to:
+   ldx focus
+   cpx #FOCUS_TEXT
+   bne @list
+   pha
+   ldx #BAR_TEXT
+   jsr sb_load                    ; (sets sb_max)
+   stz sb_new
+   stz sb_new+1
+   pla
+   beq :+                         ; Home: the top
+   lda sb_max                     ; End: the last position
+   sta sb_new
+   lda sb_max+1
+   sta sb_new+1
+:  jmp sb_apply
+@list:
    pha
    jsr focus_info                 ; X = number of items
    pla
@@ -789,6 +955,7 @@ move_to:
 ; above it that is one level shallower.
 ;------------------------------------------------------------------
 key_right:
+   jsr leave_text
    lda tree_sel
    jsr tree_ptr
    ldy #REC_FLAGS
@@ -823,6 +990,7 @@ key_right:
    rts
 
 key_left:
+   jsr leave_text
    lda tree_sel
    jsr node_depth
    beq @done                      ; the root has no parent
@@ -849,6 +1017,8 @@ key_go_files:
 key_return:
    lda focus
    beq key_go_files               ; folders: go to the file list
+   cmp #FOCUS_TEXT
+   beq key_go_files               ; text: back to the file list
    ldx file_sel
    cpx #$FF
    beq @done                      ; no file highlighted
@@ -879,9 +1049,32 @@ focus_info:
    rts
 
 ;------------------------------------------------------------------
-; set_focus - give the keyboard focus to list A (FOCUS_TREE or
-; FOCUS_FILES), and redraw both lists so the highlight bars show
-; which one has it. Going to the file list highlights the top file
+; focus_page - A = how far Page Up/Down move in the focused list:
+; its height less one line, so the line at the edge stays in view
+;------------------------------------------------------------------
+focus_page:
+   ldx focus
+   lda focus_pages,x
+   rts
+focus_pages: .byte TREE_ROWS-1, FILE_ROWS-1, PREV_ROWS-1 ; by focus
+
+;------------------------------------------------------------------
+; leave_text - if the text has the keyboard focus, move it to the
+; file list (without redrawing). Left and Right change folder,
+; which clears the text preview, so they use this first.
+;------------------------------------------------------------------
+leave_text:
+   lda focus
+   cmp #FOCUS_TEXT
+   bne :+
+   lda #FOCUS_FILES
+   sta focus
+:  rts
+
+;------------------------------------------------------------------
+; set_focus - give the keyboard focus to A (FOCUS_TREE, FOCUS_FILES
+; or FOCUS_TEXT), and redraw both lists so the highlight bars show
+; which one has it (with the text, both are dimmed). Going to the file list highlights the top file
 ; on screen if none is highlighted yet.
 ;------------------------------------------------------------------
 set_focus:
@@ -915,11 +1108,11 @@ ensure_file_visible:
    rts
 :  sec
    sbc file_scroll                ; rows below the top
-   cmp #LIST_ROWS
+   cmp #FILE_ROWS
    bcc :+                         ; on screen: nothing to do
    lda file_sel                   ; below the bottom: make it the
    sec                            ;   bottom row
-   sbc #LIST_ROWS-1
+   sbc #FILE_ROWS-1
    sta file_scroll
 :  rts
 
@@ -974,27 +1167,32 @@ handle_hold:
 ; sb_action - act on a click at click_row on scroll bar hold_bar
 ;------------------------------------------------------------------
 sb_action:
+   ldx hold_bar                   ; the bar's list, and where its
+   jsr sb_load                    ;   arrows and track are
    lda click_row
-   cmp #SB_UP_ROW
+   cmp sb_up_row
    beq @line_up                   ; up arrow
-   cmp #SB_DOWN_ROW
+   cmp sb_down_row
    beq @line_down                 ; down arrow
-   cmp #TRACK_TOP
+   cmp sb_top
    bcc @done                      ; (pointer moved above the bar)
-   cmp #TRACK_TOP+TRACK_ROWS
+   cmp sb_up_row
    bcs @done                      ; (pointer moved below the bar)
 
    ; on the track: compare with the thumb's row
-   jsr sb_load
    jsr thumb_row
    bcs @done                      ; list doesn't scroll: no thumb
    cmp click_row
    beq @on_thumb
    bcc @page_down                 ; thumb is above the pointer
-   lda #256-PAGE_STEP             ; thumb is below: page up
+   lda sb_rows                    ; thumb is below: page up by
+   eor #$FF                       ;   -(rows-1) = 1 - rows, and
+   inc a                          ;   -rows = (rows xor $FF) + 1,
+   inc a                          ;   so add 1 twice
    bra sb_scroll_by
 @page_down:
-   lda #PAGE_STEP
+   lda sb_rows                    ; a page = the list's height less
+   dec a                          ;   one line
    bra sb_scroll_by
 @on_thumb:
    lda sb_first                   ; pressing on the thumb starts a
@@ -1011,93 +1209,159 @@ sb_action:
 ; sb_scroll_by - scroll the held bar's list by A lines
 sb_scroll_by:
    ldx hold_bar
-   cpx #1
-   bne :+
-   jmp scroll_tree
-:  jmp scroll_files
+   jmp scroll_bar
 
 ;------------------------------------------------------------------
 ; sb_drag - dragging the thumb: scroll so the thumb is under the
 ; pointer.  position = row on track * largest position / (rows-1)
+; (16-bit sums, with mul16 and div32 from PNG.ASM)
 ;------------------------------------------------------------------
 sb_drag:
+   ldx hold_bar
    jsr sb_load
-   lda sb_count                   ; largest scroll position
-   sec
-   sbc #LIST_ROWS
-   bcc @done                      ; list doesn't scroll
-   beq @done
-   sta div_d
+   lda sb_max
+   ora sb_max+1
+   beq @done                      ; list doesn't scroll
 
    ; pointer's row on the track, kept inside the track
    lda click_row
    sec
-   sbc #TRACK_TOP
+   sbc sb_top
    bcs :+
    lda #0                         ; above the track
-:  cmp #TRACK_ROWS
+:  cmp sb_track
    bcc :+
-   lda #TRACK_ROWS-1              ; below the track
+   lda sb_track                   ; below the track: its last row
+   dec a
 :
-   ; (row * largest + half a step) / (TRACK_ROWS-1), rounded
-   ldx div_d
-   jsr mul8
-   lda mul_lo
-   clc
-   adc #(TRACK_ROWS-1)/2
-   sta mul_lo
-   bcc :+
-   inc mul_hi
-:  lda #TRACK_ROWS-1
-   jsr div16_8
-
-   ldx hold_bar
-   cpx #1
-   bne :+
-   jmp set_tree_scroll
-:  jmp set_file_scroll
+   ; (row * largest + half a step) / (track rows - 1), rounded
+   sta m_a
+   stz m_a+1
+   lda sb_max
+   sta m_b
+   lda sb_max+1
+   sta m_b+1
+   jsr mul16                      ; m32 = row * largest
+   ldx #3
+:  lda m32,x
+   sta d_num,x
+   dex
+   bpl :-
+   lda sb_track
+   dec a
+   sta d_div                      ; d_div = track rows - 1
+   stz d_div+1
+   jsr add_half_div               ; (so the answer is rounded)
+   jsr div32
+   lda d_num
+   sta sb_new
+   lda d_num+1
+   sta sb_new+1
+   jmp sb_apply
 @done:
    rts
 
 ;------------------------------------------------------------------
-; sb_load - copy the held bar's item count and scroll position into
-; sb_count and sb_scroll
+; sb_load - load scroll bar X's numbers: its list's length, scroll
+; position, height and first row, and from those where the bar's
+; parts go and the largest scroll position.
+; Out: sb_bar, sb_count, sb_scroll, sb_rows, sb_top, sb_track,
+;      sb_up_row, sb_down_row, sb_max
 ;------------------------------------------------------------------
 sb_load:
-   ldx hold_bar
-   cpx #1
+   stx sb_bar
+   stz sb_count+1                 ; (the lists' numbers are 8-bit)
+   stz sb_scroll+1
+   lda #LIST_TOP
+   sta sb_top
+   cpx #BAR_TREE
    bne @files
    lda tree_count
-   ldy tree_scroll
-   bra @store
-@files:
-   lda file_count
-   ldy file_scroll
-@store:
    sta sb_count
-   sty sb_scroll
-   rts
+   lda tree_scroll
+   sta sb_scroll
+   lda #TREE_ROWS
+   bra @rows
+@files:
+   cpx #BAR_FILES
+   bne @text
+   lda file_count
+   sta sb_count
+   lda file_scroll
+   sta sb_scroll
+   lda #FILE_ROWS
+   bra @rows
+@text:                            ; the text preview (TEXT.ASM)
+   lda t_lines
+   sta sb_count
+   lda t_lines+1
+   sta sb_count+1
+   lda t_top
+   sta sb_scroll
+   lda t_top+1
+   sta sb_scroll+1
+   lda #PREV_TOP
+   sta sb_top
+   lda #PREV_ROWS
+@rows:
+   sta sb_rows
+
+   ; the track takes all but the last two rows, which hold the up
+   ; and down arrows
+   sec
+   sbc #2
+   sta sb_track                   ; rows - 2
+   clc
+   adc sb_top
+   sta sb_up_row                  ; top + rows - 2
+   inc a
+   sta sb_down_row                ; top + rows - 1
+
+   ; largest scroll position = count - rows (0 if it all fits)
+   lda sb_count
+   sec
+   sbc sb_rows
+   sta sb_max
+   lda sb_count+1
+   sbc #0
+   sta sb_max+1
+   bcs :+
+   stz sb_max
+   stz sb_max+1
+:  rts
 
 ;------------------------------------------------------------------
 ; thumb_row - which screen row the thumb is on
-; In:  sb_count, sb_scroll
+; In:  sb_load done
 ; Out: C = 1 if the list is too short to scroll (no thumb), else
-;      C = 0 and A = TRACK_TOP + scroll * (TRACK_ROWS-1) / largest
+;      C = 0 and A = sb_top + scroll * (track rows - 1) / largest
 ;------------------------------------------------------------------
 thumb_row:
-   lda sb_count
-   sec
-   sbc #LIST_ROWS                 ; largest scroll position
-   bcc @none
+   lda sb_max
+   ora sb_max+1
    beq @none
-   pha
-   lda sb_scroll
-   ldx #TRACK_ROWS-1
-   jsr mul8                       ; scroll * (TRACK_ROWS-1)
-   pla
-   jsr div16_8                    ;   / largest
+   lda sb_scroll                  ; m32 = scroll * (track rows - 1)
+   sta m_a
+   lda sb_scroll+1
+   sta m_a+1
+   lda sb_track
+   dec a
+   sta m_b
+   stz m_b+1
+   jsr mul16
+   ldx #3                         ;   / largest
+:  lda m32,x
+   sta d_num,x
+   dex
+   bpl :-
+   lda sb_max
+   sta d_div
+   lda sb_max+1
+   sta d_div+1
+   jsr div32
+   lda d_num
    clc
-   adc #TRACK_TOP
+   adc sb_top
    clc
    rts
 @none:
@@ -1337,11 +1601,11 @@ ensure_tree_visible:
    rts
 :  sec
    sbc tree_scroll                ; rows below the top
-   cmp #LIST_ROWS
+   cmp #TREE_ROWS
    bcc :+                         ; on screen: nothing to do
    lda tree_sel                   ; below the bottom: make it the
    sec                            ;   bottom row
-   sbc #LIST_ROWS-1
+   sbc #TREE_ROWS-1
    sta tree_scroll
 :  rts
 
@@ -1371,3 +1635,4 @@ restore_system:
 .include "DOS.ASM"
 .include "LAUNCH.ASM"
 .include "PNG.ASM"
+.include "TEXT.ASM"

@@ -245,7 +245,7 @@ pad_field:
 :  rts
 
 ;------------------------------------------------------------------
-; put_ascii - write ASCII character A
+; put_ascii - write ASCII character A (changes X; keeps Y)
 ;------------------------------------------------------------------
 put_ascii:
    jsr ascii_to_screen
@@ -354,16 +354,20 @@ vfill:
 
 ;------------------------------------------------------------------
 ; ascii_to_screen - convert an ASCII character in A to a screen code
-; for the upper/lower case character set.
+; for the upper/lower case character set. Changes X.
 ;
 ;   ASCII         screen code
 ;   $20-$3F  ->   same          (space, digits, punctuation)
 ;   $40 @    ->   $00
 ;   $41-$5A  ->   same          (A-Z)
-;   $5B-$5F  ->   $1B-$1F       ([ \ ] ^ _ , shown as their PETSCII
-;                                look-alikes)
+;   $5B [    ->   $1B
+;   $5D ]    ->   $1D
+;   $5C \ $5E ^ $5F _ $60 `      -> our own characters, CH_BSLASH..
 ;   $61-$7A  ->   $01-$1A       (a-z)
+;   $7B { $7C | $7D } $7E ~      -> our own characters, CH_LBRACE..
 ;   anything else -> '?'
+; (PETSCII has a pound sign and arrows where ASCII has \ ^ _, and
+; no ` { | } ~ at all, so those are custom characters, see glyphs.)
 ;------------------------------------------------------------------
 ascii_to_screen:
    cmp #$20
@@ -373,11 +377,23 @@ ascii_to_screen:
    beq @at
    cmp #$5B
    bcc @done                      ; A-Z: $41-$5A
-   cmp #$60
-   bcc @sub40                     ; [ \ ] ^ _
-   beq @other
+   beq @sub40                     ; [
+   cmp #$5D
+   beq @sub40                     ; ]
+   cmp #$61
+   bcc @low_table                 ; \ ^ _ `
    cmp #$7B
+   bcc @lower                     ; a-z
+   cmp #$7F
    bcs @other
+   tax                            ; { | } ~
+   lda ascii_7b-$7B,x
+   rts
+@low_table:
+   tax
+   lda ascii_5c-$5C,x
+   rts
+@lower:
    sec                            ; a-z: $01-$1A
    sbc #$60
    rts
@@ -392,6 +408,10 @@ ascii_to_screen:
    lda #$3F                       ; '?'
 @done:
    rts
+
+; screen codes for ASCII $5C-$60 and $7B-$7E ($5D is never looked up)
+ascii_5c: .byte CH_BSLASH, $1D, CH_CARET, CH_USCORE, CH_BTICK
+ascii_7b: .byte CH_LBRACE, CH_VBAR, CH_RBRACE, CH_TILDE
 
 ;------------------------------------------------------------------
 ; pet_to_screen - convert a PETSCII character in A to a screen code
@@ -696,18 +716,28 @@ draw_window:
    sta sptr
    lda #>str_preview
    sta sptr+1
-   ldx #PREV_X
-   ldy #LABEL_ROW
+   ldx #PREV_X                    ; (below the file list)
+   ldy #PREV_LABEL_ROW
    lda #COL_LABEL
    jsr print_at
 
    ; ---- the three boxes ----
+   lda #BOX_T                     ; the folders: tall, on the left
+   sta lb_t
+   lda #TREE_ROWS
+   sta lb_rows
    ldx #TREE_L
    ldy #TREE_R
    jsr draw_listbox
+   lda #FILE_ROWS                 ; the files: top right
+   sta lb_rows                    ;   (lb_t is still BOX_T)
    ldx #FILE_L
    ldy #FILE_R
    jsr draw_listbox
+   lda #PREV_BOX_T                ; the preview: bottom right
+   sta lb_t
+   lda #PREV_ROWS
+   sta lb_rows
    ldx #PREV_L
    ldy #PREV_R
    jsr draw_listbox
@@ -719,12 +749,12 @@ draw_window:
    lda #PREV_W
    sta fill_n
    ldx #PREV_X
-   ldy #LIST_TOP
+   ldy #PREV_TOP
 @preview:
    lda #$20
    jsr hfill
    iny
-   cpy #LIST_TOP+LIST_ROWS
+   cpy #PREV_TOP+PREV_ROWS
    bne @preview
 
    ; ---- hint on the right of the status line ----
@@ -740,8 +770,10 @@ draw_window:
 ;------------------------------------------------------------------
 ; draw_listbox - the sunken edge around a list box: black along the
 ; top and down the left, white along the bottom and down the right.
-; The box runs from row BOX_T to BOX_B; the list rows are inside it.
-; In: X = left edge column, Y = right edge column
+; The edge goes round lb_rows rows of contents, in the row above
+; them (lb_t), the row below and the columns either side.
+; In: X = left edge column, Y = right edge column,
+;     lb_t = top edge row, lb_rows = rows inside
 ;------------------------------------------------------------------
 draw_listbox:
    stx lb_l
@@ -758,7 +790,7 @@ draw_listbox:
    lda lb_w
    sta fill_n
    inx
-   ldy #BOX_T
+   ldy lb_t
    lda #CH_E_B                    ; top edge
    jsr hfill
    ldx lb_l
@@ -767,12 +799,13 @@ draw_listbox:
    ldx lb_r
    lda #CH_C_BL                   ; top right corner (the end of
    jsr char_at                    ;   the top edge)
-   lda #LIST_ROWS
+   lda lb_rows
    sta fill_n
    ldx lb_l
-   ldy #LIST_TOP
+   ldy lb_t
+   iny                            ; first row inside
    lda #CH_E_R                    ; left edge
-   jsr vfill                      ; (leaves Y = BOX_B)
+   jsr vfill                      ; (leaves Y = the bottom edge row)
    lda #CH_C_TR                   ; bottom left corner (the end of
    jsr char_at                    ;   the left edge)
 
@@ -788,32 +821,33 @@ draw_listbox:
    inx
    lda #CH_E_T                    ; bottom edge
    jsr hfill
-   lda #LIST_ROWS
+   lda lb_rows
    sta fill_n
    ldx lb_r
-   ldy #LIST_TOP
+   ldy lb_t
+   iny
    lda #CH_E_L                    ; right edge
    jmp vfill
 
 ;------------------------------------------------------------------
 ; draw_scrollbar - draw a scroll bar, Amiga style: the track from
 ; the top, with the up and down arrows together at the bottom.
-; In: X = column, sb_count = items in the list, sb_scroll = scroll
-;     position. The thumb is only drawn if the list can scroll.
+; In: X = column, and sb_load done for the bar. The thumb is only
+;     drawn if the list can scroll.
 ;------------------------------------------------------------------
 draw_scrollbar:
    stx sb_col
    lda #COL_FRAME
    sta cur_color
-   ldy #SB_UP_ROW
+   ldy sb_up_row
    lda #CH_SB_UP                  ; up arrow
    jsr char_at
-   ldy #SB_DOWN_ROW
+   ldy sb_down_row
    lda #CH_SB_DOWN                ; down arrow
    jsr char_at
-   lda #TRACK_ROWS
+   lda sb_track
    sta fill_n
-   ldy #TRACK_TOP
+   ldy sb_top
    lda #CH_SB_TRACK               ; empty track
    jsr vfill
    jsr thumb_row                  ; where does the thumb go?
@@ -921,14 +955,12 @@ draw_tree:
    jsr pad_field                  ; blank out the rest of the row
    inc tmp
    lda tmp
-   cmp #LIST_ROWS
+   cmp #TREE_ROWS
    beq :+
    jmp @row                       ; (too far for a branch)
 :
-   lda tree_count                 ; and the scroll bar
-   sta sb_count
-   lda tree_scroll
-   sta sb_scroll
+   ldx #BAR_TREE                  ; and the scroll bar
+   jsr sb_load
    ldx #TREE_SB
    jmp draw_scrollbar
 
@@ -936,8 +968,10 @@ draw_tree:
 ; draw_files - redraw the file list and its scroll bar
 ;
 ; Each row shows file (file_scroll + row) of the sorted list
-; (programs first, then other files, each group in name order).
-; Programs are blue, other files black, and the highlighted file
+; (programs, pictures, text files, then the rest, each group in
+; name order: see compare_names in TREE.ASM).
+; Programs are blue, pictures and text files black, other files
+; dark grey, and the highlighted file
 ; gets a blue bar. An empty folder shows "(no files)", and a folder
 ; that couldn't be read shows an error.
 ;------------------------------------------------------------------
@@ -970,14 +1004,19 @@ draw_files:
    jsr load_rec                   ; copy it into recbuf
 
    ; pick colours: X = normal colour, Y = highlighted colour
-   ldx #COL_FILE                  ; an ordinary file
    ldy #COL_SEL
    lda recbuf+REC_FLAGS
-   and #FLAG_PRG
+   ldx #COL_PRG                   ; a program: blue
+   bit #FLAG_PRG
    beq :+
-   ldx #COL_PRG                   ; a program
    ldy #COL_SEL_PRG
-:  lda focus                      ; no keyboard focus: the highlight
+   bra @picked
+:  ldx #COL_FILE                  ; a picture or text file, which
+   bit #FLAG_PNG | FLAG_TXT       ;   can be previewed: black
+   bne @picked
+   ldx #COL_OTHER                 ; anything else: dark grey, to show
+@picked:                          ;   there is nothing to do with it
+   lda focus                      ; no keyboard focus: the highlight
    cmp #FOCUS_FILES               ;   is dark grey instead of blue
    beq :+
    ldy #COL_SEL_DIM
@@ -1017,14 +1056,12 @@ draw_files:
    jsr pad_field                  ; blank out the rest of the row
    inc tmp
    lda tmp
-   cmp #LIST_ROWS
+   cmp #FILE_ROWS
    beq :+
    jmp @row                       ; (too far for a branch)
 :
-   lda file_count                 ; and the scroll bar
-   sta sb_count
-   lda file_scroll
-   sta sb_scroll
+   ldx #BAR_FILES                 ; and the scroll bar
+   jsr sb_load
    ldx #FILE_SB
    jsr draw_scrollbar
    jmp preview_update             ; the list (or highlight) may have
@@ -1056,6 +1093,8 @@ fill_left: .res 1                 ; rows left for vfill
 lb_l:      .res 1                 ; list box edges for draw_listbox
 lb_r:      .res 1
 lb_w:      .res 1                 ; list box width between corners
+lb_t:      .res 1                 ; list box top edge row
+lb_rows:   .res 1                 ; list box rows inside the edge
 sb_col:    .res 1                 ; column for draw_scrollbar
 .popseg
 
@@ -1145,4 +1184,15 @@ glyphs:
    .byte $00,$E0,$FF,$FF,$FF,$FF,$FF,$00   ; $91 folder icon (filled)
    .byte $FE,$82,$92,$BA,$92,$82,$FE,$00   ; $92 [+] box
    .byte $FE,$82,$82,$BA,$82,$82,$FE,$00   ; $93 [-] box
+   ; ---- $94-$9B: ASCII characters missing from PETSCII, drawn
+   ;      with 2-pixel-wide strokes like the rest of the font ----
+   .byte $00,$C0,$60,$30,$18,$0C,$06,$00   ; $94 \ backslash
+   .byte $10,$38,$6C,$C6,$00,$00,$00,$00   ; $95 ^ caret
+   .byte $00,$00,$00,$00,$00,$00,$00,$FF   ; $96 _ underscore
+   .byte $30,$18,$0C,$00,$00,$00,$00,$00   ; $97 ` backtick
+   .byte $0E,$18,$18,$70,$18,$18,$0E,$00   ; $98 { left brace
+   .byte $18,$18,$18,$18,$18,$18,$18,$18   ; $99 | bar (full height,
+                                           ;   so bars join up)
+   .byte $70,$18,$18,$0E,$18,$18,$70,$00   ; $9A } right brace
+   .byte $00,$00,$76,$DC,$00,$00,$00,$00   ; $9B ~ tilde
 glyphs_end:

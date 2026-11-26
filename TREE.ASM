@@ -349,7 +349,6 @@ collapse_node:
    sta tree_sel
 @redraw:
    ; the tree is shorter, so make sure the scroll position is valid
-   lda #0
    jsr scroll_tree_clamp
    jsr ensure_tree_visible
    jmp draw_tree
@@ -357,9 +356,11 @@ collapse_node:
 ; scroll_tree_clamp - pull tree_scroll back in range after the tree
 ; shrank (calc_scroll with a movement of 0 just clamps).
 scroll_tree_clamp:
-   ldx tree_count
-   ldy tree_scroll
+   ldx #BAR_TREE
+   jsr sb_load
+   lda #0
    jsr calc_scroll
+   lda sb_new
    sta tree_scroll
    rts
 
@@ -487,7 +488,8 @@ cmd_root_end:
 
 ;------------------------------------------------------------------
 ; sort_records - sort a list of records alphabetically (ignoring
-; upper/lower case), with programs (FLAG_PRG) before other files.
+; upper/lower case), in groups: programs, then pictures, then text
+; files, then everything else (see compare_names).
 ;
 ; In: sort_bank = the (first) bank the records are in
 ;     optr      = the "order" array to fill in (file_order or
@@ -560,22 +562,27 @@ sort_records:
 ; Out: C = 1 if the record at ptr comes after the key, else C = 0
 ; (RAM_BANK must already be set to ptr's bank.)
 ;
-; Programs come before everything else, so they are at the top of
-; the file list: if only one of the two is a program, that decides
-; it. Otherwise (both programs, or neither) the names are compared.
-; Folder records never have FLAG_PRG set, so folders just sort by
-; name.
+; The file list is in groups, so the files people use are near the
+; top:
+;   0  programs  (FLAG_PRG, .PRG)
+;   1  pictures  (FLAG_PNG, .PNG)
+;   2  text      (FLAG_TXT, .TXT and .MD)
+;   3  everything else
+; If the two are in different groups, the group decides it;
+; otherwise the names are compared. Folder records (sub-folders
+; being sorted for the tree) have no flags yet, so they are all in
+; group 3 and just sort by name.
 ;------------------------------------------------------------------
 compare_names:
-   ldy #REC_FLAGS
+   lda recbuf+REC_FLAGS           ; the key's group
+   jsr sort_group
+   sta tmp
+   ldy #REC_FLAGS                 ; ptr's group
    lda (ptr),y
-   eor recbuf+REC_FLAGS           ; bits that differ between the two
-   and #FLAG_PRG
-   beq @by_name                   ; both programs, or neither
-   lda recbuf+REC_FLAGS           ; just one is a program. If it is
-   and #FLAG_PRG                  ;   the key, ptr comes after it
-   cmp #FLAG_PRG                  ;   (C = 1), otherwise ptr is the
-   rts                            ;   program and comes first (C = 0)
+   jsr sort_group
+   cmp tmp                        ; C = 1 if ptr's group >= the key's
+   beq @by_name                   ; same group: compare the names
+   rts                            ; different: C is the answer
 
 @by_name:
    ldy #REC_NAME
@@ -596,6 +603,22 @@ compare_names:
    clc                            ; equal does not count as "after"
 @diff:
    rts
+
+;------------------------------------------------------------------
+; sort_group - A = the group (0-3, see compare_names) of a record
+; whose flags are in A. A file has at most one of FLAG_PRG
+; (bit 0), FLAG_PNG (bit 1) and FLAG_TXT (bit 2) set, so the
+; bottom 3 bits pick an entry in sort_groups.
+;------------------------------------------------------------------
+sort_group:
+   and #FLAG_PRG | FLAG_PNG | FLAG_TXT
+   tax
+   lda sort_groups,x
+   rts
+
+.assert FLAG_PRG = 1 && FLAG_PNG = 2 && FLAG_TXT = 4, error, "sort_groups expects these flag bits"
+;                  none PRG  PNG  -    TXT  -    -    -
+sort_groups: .byte 3,   0,   1,   3,   2,   3,   3,   3
 
 ;------------------------------------------------------------------
 ; fold_case - change an ASCII lower case letter in A to upper case,

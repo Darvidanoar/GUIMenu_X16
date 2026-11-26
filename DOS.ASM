@@ -169,7 +169,8 @@ read_dir:
    lda #LFN_DIR
    jsr CLOSE
 
-   ; sort the files by name
+   ; sort the files: in groups (programs, pictures, text, the
+   ; rest), each by name
    lda #FILE_BANK
    sta sort_bank
    lda #<file_order
@@ -255,11 +256,19 @@ parse_line:
    bcs @ignore                    ;   replace (none: all programs)
    bra @store_file
 @not_prg:
-   jsr is_png                     ; mark pictures, for the preview
-   bcc :+
+   jsr is_png                     ; mark pictures and text files,
+   bcc :+                         ;   for the preview
    lda #FLAG_PNG
+   bra @flag
+:  jsr is_txt
+   bcs :+
+   jsr is_md
+   bcc @flagged
+:  lda #FLAG_TXT
+@flag:
    sta recbuf+REC_FLAGS
-:  lda file_count
+@flagged:
+   lda file_count
    cmp #MAX_FILES
    bcs @ignore                    ; list full: drop it
 @add_file:
@@ -342,13 +351,16 @@ name_to_recbuf:
 ; ASCII upper and lower case letters differ only in bit 5 ($20), so
 ; AND #$DF turns either into upper case before comparing.
 ;------------------------------------------------------------------
-; is_png - the same for ".PNG"
+; is_png, is_txt - the same for ".PNG" and ".TXT"
 ;------------------------------------------------------------------
 is_prg:
    ldy #ext_prg-exts
    bra has_ext
 is_png:
    ldy #ext_png-exts
+   bra has_ext
+is_txt:
+   ldy #ext_txt-exts
 has_ext:                          ; Y = the extension in exts
    lda namelen
    cmp #4
@@ -380,6 +392,33 @@ has_ext:                          ; Y = the extension in exts
 exts:
 ext_prg: .byte $50, $52, $47      ; PRG
 ext_png: .byte $50, $4E, $47      ; PNG
+ext_txt: .byte $54, $58, $54      ; TXT
+
+;------------------------------------------------------------------
+; is_md - does the name in namebuf end in .MD (any case)?
+; Out: C = 1 if it does
+;------------------------------------------------------------------
+is_md:
+   lda namelen
+   cmp #3
+   bcc @no                        ; too short
+   tax                            ; X = length
+   lda namebuf-3,x
+   cmp #$2E                       ; '.'
+   bne @no
+   lda namebuf-2,x
+   and #$DF                       ; upper case
+   cmp #$4D                       ; 'M'
+   bne @no
+   lda namebuf-1,x
+   and #$DF
+   cmp #$44                       ; 'D'
+   bne @no
+   sec
+   rts
+@no:
+   clc
+   rts
 
 .pushseg
 .segment "BSS"
