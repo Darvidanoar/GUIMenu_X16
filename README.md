@@ -22,6 +22,7 @@ Files in the file panel are ordered:
 
 ![GUIMenu running in the X16 emulator](docs/screenshot.png)
 
+![GUIMenu running in the X16 emulator](docs/screenshottxt.png)
 ## Features
 
 - **Folder tree:** shows the folders on the SD card, each with an orange folder icon. Click a folder to open it. Click its `[+]`/`[-]` box to expand or collapse it.
