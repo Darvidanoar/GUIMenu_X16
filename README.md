@@ -1,10 +1,22 @@
 # GUIMenu_X16
 
-A mouse-driven program launcher for the [Commander X16](https://www.commanderx16.com/), written in 6502 assembly.
+A mouse-driven program launcher styled after an Amiga Workbench, for the [Commander X16](https://www.commanderx16.com/) and written in 6502 assembly.
 
-Browse the folders on your SD card, see the files in each one, and double-click a `.PRG` to load and run it. It's styled after an Amiga Workbench 2.0/3.1 window.
+While the File Manager program that came with the Commander X16 is good, I wanted to make something that would be easy to navigate and make use of the very underutilised mouse.
 
-Preview images can be added to the folder as PNG files making them easy to create.  The typical way to create preview images would be to launch the game in the emulator and hit ctrl-p to take a screenshot.
+
+Use the mouse or keyboard to browse the folders on your SD card and see the files in each one.  Double-click a `.PRG` to load and run it.
+
+As you navigate the folders, if there is a `.PNG` file in the currently selected folder it will display in the preview panel.  If there are more than one PNG file, the first `.PNG` file (alphabetically) will be displayed in the preview panel.  Selecting any other `.PNG` file in the folder will load it into the previw panel. 
+
+Selecting a `.TXT` or `.MD` file will load them into the preview panel.
+
+`.PNG` files were chosen because they are easy to create.  The typical way to create preview images would be to launch the game in the emulator and hit ctrl-p to take a screenshot.  Loading images into the preview panel is not fast, but there is no need to wait for the load to complete before moving onto another folder.
+
+
+
+
+
 
 ![GUIMenu running in the X16 emulator](docs/screenshot.png)
 
